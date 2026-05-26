@@ -1,64 +1,27 @@
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
-from app.database import get_db
 from app.middleware.auth import get_current_user
-from app.models.quiz import Question, QuestionFeedback, QuizSession
+from app.models.quiz import QuizSession
 from app.models.user import User
+from app.repositories.quiz import QuizRepository, get_quiz_repo
+from app.schemas.quiz import AnswerSubmit, QuestionOut, QuizCreate, QuizOut
 from app.services.quiz_engine import evaluate_short_answer, generate_questions
 from app.services.rag import build_context, retrieve
 
 router = APIRouter(prefix="/quiz", tags=["quiz"])
 
 
-class QuizCreate(BaseModel):
-    mode: str  # "practice" | "exam"
-    scope_type: str
-    scope_id: str
-    format: str  # "mcq" | "short_answer" | "true_false"
-    difficulty: str = "intermediate"
-    question_count: int = 10
-    topic_focus: str | None = None
-    time_limit_seconds: int | None = None
-
-
-class AnswerSubmit(BaseModel):
-    answers: list[dict]  # [{"question_id": "...", "answer": "..."}]
-
-
-class QuizOut(BaseModel):
-    id: str
-    mode: str
-    scope_type: str
-    scope_id: str
-    config: dict
-    question_ids: list
-    score: int | None
-    started_at: str
-    completed_at: str | None
-    time_limit_seconds: int | None
-
-
-class QuestionOut(BaseModel):
-    id: str
-    format: str
-    difficulty: str
-    stem: str
-    options: list | None
-
-
 @router.post("/sessions", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_quiz_session(
     body: QuizCreate,
-    db: Session = Depends(get_db),
+    repo: QuizRepository = Depends(get_quiz_repo),
     current_user: User = Depends(get_current_user),
 ):
     questions = await generate_questions(
-        db=db,
+        quiz_repo=repo,
+        user_id=current_user.id,
         scope_type=body.scope_type,
         scope_id=uuid.UUID(body.scope_id),
         format=body.format,
@@ -67,7 +30,7 @@ async def create_quiz_session(
         topic_focus=body.topic_focus,
     )
 
-    session = QuizSession(
+    session = repo.create_session(QuizSession(
         user_id=current_user.id,
         mode=body.mode,
         scope_type=body.scope_type,
@@ -80,36 +43,40 @@ async def create_quiz_session(
         },
         question_ids=[str(q.id) for q in questions],
         time_limit_seconds=body.time_limit_seconds,
-    )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
+    ))
 
-    # In exam mode, strip correct answers from the question payload
     question_list = [
         QuestionOut(id=str(q.id), format=q.format, difficulty=q.difficulty, stem=q.stem, options=q.options)
         for q in questions
     ]
-
     return {"session": _quiz_out(session), "questions": [q.model_dump() for q in question_list]}
 
 
 @router.get("/sessions", response_model=list[QuizOut])
-def list_quiz_sessions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    sessions = db.query(QuizSession).filter_by(user_id=current_user.id).order_by(QuizSession.started_at.desc()).all()
-    return [_quiz_out(s) for s in sessions]
+def list_quiz_sessions(
+    repo: QuizRepository = Depends(get_quiz_repo),
+    current_user: User = Depends(get_current_user),
+):
+    return [_quiz_out(s) for s in repo.list_sessions_for_user(current_user.id)]
 
 
 @router.get("/sessions/{session_id}", response_model=dict)
-def get_quiz_session(session_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    session = _get_owned_session(db, session_id, current_user.id)
-    questions = db.query(Question).filter(Question.id.in_([uuid.UUID(qid) for qid in session.question_ids])).all()
+def get_quiz_session(
+    session_id: uuid.UUID,
+    repo: QuizRepository = Depends(get_quiz_repo),
+    current_user: User = Depends(get_current_user),
+):
+    session = _require_owned(repo, session_id, current_user.id)
+    questions = repo.get_questions_by_ids(
+        [uuid.UUID(qid) for qid in session.question_ids]
+    )
 
     is_completed = session.completed_at is not None
     question_data = []
     for q in questions:
-        q_dict = QuestionOut(id=str(q.id), format=q.format, difficulty=q.difficulty, stem=q.stem, options=q.options).model_dump()
-        # Only include answers/explanations after completion
+        q_dict = QuestionOut(
+            id=str(q.id), format=q.format, difficulty=q.difficulty, stem=q.stem, options=q.options
+        ).model_dump()
         if is_completed or session.mode == "practice":
             q_dict["correct_answer"] = q.correct_answer
             q_dict["explanation"] = q.explanation
@@ -122,14 +89,17 @@ def get_quiz_session(session_id: uuid.UUID, db: Session = Depends(get_db), curre
 async def submit_quiz(
     session_id: uuid.UUID,
     body: AnswerSubmit,
-    db: Session = Depends(get_db),
+    repo: QuizRepository = Depends(get_quiz_repo),
     current_user: User = Depends(get_current_user),
 ):
-    session = _get_owned_session(db, session_id, current_user.id)
+    session = _require_owned(repo, session_id, current_user.id)
     if session.completed_at:
         raise HTTPException(status_code=400, detail="Quiz already submitted")
 
-    questions = {str(q.id): q for q in db.query(Question).filter(Question.id.in_([uuid.UUID(qid) for qid in session.question_ids])).all()}
+    questions = {
+        str(q.id): q
+        for q in repo.get_questions_by_ids([uuid.UUID(qid) for qid in session.question_ids])
+    }
     results = []
     total_score = 0
 
@@ -141,9 +111,8 @@ async def submit_quiz(
             continue
 
         if q.format == "short_answer":
-            chunks = await retrieve(db, q.stem, session.scope_type, session.scope_id, top_k=4)
-            context_text = build_context(chunks)
-            eval_result = await evaluate_short_answer(q, user_answer, context_text)
+            chunks = await retrieve(repo.db, q.stem, session.scope_type, session.scope_id, top_k=4)
+            eval_result = await evaluate_short_answer(q, user_answer, build_context(chunks))
             is_correct = eval_result.get("is_correct", False)
             score_contribution = eval_result.get("score", 0)
             feedback = eval_result.get("feedback", "")
@@ -165,29 +134,31 @@ async def submit_quiz(
             "explanation": q.explanation,
         })
 
-    session.answers = results
-    session.score = total_score // len(results) if results else 0
-    session.completed_at = datetime.now(timezone.utc)
-    db.commit()
+    overall_score = total_score // len(results) if results else 0
+    repo.complete_session(session, results, overall_score)
 
     return {"session": _quiz_out(session), "results": results, "overall_score": session.score}
 
 
 @router.post("/questions/{question_id}/flag", status_code=status.HTTP_204_NO_CONTENT)
-def flag_question(question_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    q = db.get(Question, question_id)
-    if not q:
+def flag_question(
+    question_id: uuid.UUID,
+    repo: QuizRepository = Depends(get_quiz_repo),
+    current_user: User = Depends(get_current_user),
+):
+    if not repo.get_question(question_id):
         raise HTTPException(status_code=404, detail="Question not found")
-    existing = db.query(QuestionFeedback).filter_by(question_id=question_id, user_id=current_user.id).first()
-    if existing:
-        existing.flagged_bad_quality = True
-    else:
-        db.add(QuestionFeedback(question_id=question_id, user_id=current_user.id, flagged_bad_quality=True))
-    db.commit()
+    repo.upsert_flag(question_id, current_user.id)
 
 
-def _get_owned_session(db: Session, session_id: uuid.UUID, user_id: uuid.UUID) -> QuizSession:
-    session = db.query(QuizSession).filter_by(id=session_id, user_id=user_id).first()
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _require_owned(
+    repo: QuizRepository, session_id: uuid.UUID, user_id: uuid.UUID
+) -> QuizSession:
+    session = repo.get_owned_session(session_id, user_id)
     if not session:
         raise HTTPException(status_code=404, detail="Quiz session not found")
     return session

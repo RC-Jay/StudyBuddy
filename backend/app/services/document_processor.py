@@ -23,6 +23,7 @@ import tiktoken
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.database import SessionLocal
+from app.enums import ProcessingStatus
 from app.models.document import Document
 from app.services.document_loader import get_loader
 from app.services.langchain_setup import get_vectorstore
@@ -51,7 +52,7 @@ async def process_document(document_id: uuid.UUID) -> None:
         if not doc:
             return
 
-        doc.processing_status = "processing"
+        doc.processing_status = ProcessingStatus.PROCESSING
         db.commit()
 
         # 1. Load raw bytes from storage
@@ -90,14 +91,14 @@ async def process_document(document_id: uuid.UUID) -> None:
         vectorstore = get_vectorstore()
         await asyncio.to_thread(vectorstore.add_documents, chunks)
 
-        doc.processing_status = "ready"
+        doc.processing_status = ProcessingStatus.READY
         db.commit()
 
     except Exception as exc:
         db.rollback()
         doc = db.get(Document, document_id)
         if doc:
-            doc.processing_status = "failed"
+            doc.processing_status = ProcessingStatus.FAILED
             doc.processing_error = str(exc)
             db.commit()
     finally:

@@ -3,13 +3,12 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
-from app.database import get_db
 from app.middleware.auth import get_current_user
 from app.models.chat import ChatMessage, ChatSession
 from app.models.user import User
+from app.repositories.chat import ChatRepository, get_chat_repo
+from app.schemas.chat import MessageIn, MessageOut, SessionCreate, SessionOut
 from app.services.llm import get_chat_provider
 from app.services.rag import build_citations, build_context, retrieve
 
@@ -20,56 +19,36 @@ Always cite the document name and page number when referencing specific content,
 If the answer is not in the source material, say so clearly — do not invent information."""
 
 
-class SessionCreate(BaseModel):
-    scope_type: str  # "document" | "collection"
-    scope_id: str
-    title: str | None = None
-
-
-class MessageIn(BaseModel):
-    content: str
-
-
-class SessionOut(BaseModel):
-    id: str
-    scope_type: str
-    scope_id: str
-    title: str | None
-    created_at: str
-    message_count: int
-
-
-class MessageOut(BaseModel):
-    id: str
-    role: str
-    content: str
-    citations: list | None
-    created_at: str
-
-
 @router.post("/sessions", response_model=SessionOut, status_code=201)
-def create_session(body: SessionCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    session = ChatSession(
+def create_session(
+    body: SessionCreate,
+    repo: ChatRepository = Depends(get_chat_repo),
+    current_user: User = Depends(get_current_user),
+):
+    session = repo.create_session(ChatSession(
         user_id=current_user.id,
         scope_type=body.scope_type,
         scope_id=uuid.UUID(body.scope_id),
         title=body.title,
-    )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
+    ))
     return _session_out(session)
 
 
 @router.get("/sessions", response_model=list[SessionOut])
-def list_sessions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    sessions = db.query(ChatSession).filter_by(user_id=current_user.id).order_by(ChatSession.created_at.desc()).all()
-    return [_session_out(s) for s in sessions]
+def list_sessions(
+    repo: ChatRepository = Depends(get_chat_repo),
+    current_user: User = Depends(get_current_user),
+):
+    return [_session_out(s) for s in repo.list_sessions_for_user(current_user.id)]
 
 
 @router.get("/sessions/{session_id}", response_model=dict)
-def get_session(session_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    session = _get_owned_session(db, session_id, current_user.id)
+def get_session(
+    session_id: uuid.UUID,
+    repo: ChatRepository = Depends(get_chat_repo),
+    current_user: User = Depends(get_current_user),
+):
+    session = _require_owned(repo, session_id, current_user.id)
     return {
         **_session_out(session).model_dump(),
         "messages": [_msg_out(m) for m in session.messages],
@@ -80,55 +59,57 @@ def get_session(session_id: uuid.UUID, db: Session = Depends(get_db), current_us
 async def send_message(
     session_id: uuid.UUID,
     body: MessageIn,
-    db: Session = Depends(get_db),
+    repo: ChatRepository = Depends(get_chat_repo),
     current_user: User = Depends(get_current_user),
 ):
-    session = _get_owned_session(db, session_id, current_user.id)
+    session = _require_owned(repo, session_id, current_user.id)
 
     # Persist user message
-    user_msg = ChatMessage(session_id=session.id, role="user", content=body.content)
-    db.add(user_msg)
-    db.commit()
+    repo.add_message(ChatMessage(session_id=session.id, role="user", content=body.content))
 
     # Retrieve relevant chunks
-    chunks = await retrieve(db, body.content, session.scope_type, session.scope_id)
+    chunks = await retrieve(repo.db, body.content, session.scope_type, session.scope_id)
     context = build_context(chunks)
     citations = build_citations(chunks)
 
-    # Build message history for the LLM (last 10 turns for context)
+    # Build message history (last 20 messages for context)
     history = session.messages[-20:]
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     if context:
         messages.append({"role": "system", "content": f"SOURCE MATERIAL:\n\n{context}"})
-    for msg in history[:-1]:  # exclude the message we just added
+    for msg in history[:-1]:  # exclude the user message we just added
         messages.append({"role": msg.role, "content": msg.content})
     messages.append({"role": "user", "content": body.content})
 
-    # Stream response and collect full text for persistence
+    # Stream response and persist the completed message
     async def stream_and_save():
-        full_response = []
+        full_response: list[str] = []
         async for chunk in get_chat_provider().stream(messages):
             full_response.append(chunk)
             yield f"data: {json.dumps({'delta': chunk})}\n\n"
 
-        # Persist assistant message after stream completes
-        assistant_content = "".join(full_response)
         assistant_msg = ChatMessage(
             session_id=session.id,
             role="assistant",
-            content=assistant_content,
+            content="".join(full_response),
             citations=citations,
         )
-        db.add(assistant_msg)
-        db.commit()
+        repo.add_message_no_flush(assistant_msg)
+        repo.commit()
 
         yield f"data: {json.dumps({'done': True, 'citations': citations, 'message_id': str(assistant_msg.id)})}\n\n"
 
     return StreamingResponse(stream_and_save(), media_type="text/event-stream")
 
 
-def _get_owned_session(db: Session, session_id: uuid.UUID, user_id: uuid.UUID) -> ChatSession:
-    session = db.query(ChatSession).filter_by(id=session_id, user_id=user_id).first()
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _require_owned(
+    repo: ChatRepository, session_id: uuid.UUID, user_id: uuid.UUID
+) -> ChatSession:
+    session = repo.get_owned_session(session_id, user_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import lru_cache
 
 import httpx
 
@@ -91,4 +92,7 @@ class ChangepayClient:
         )
 
 
-changepay_client = ChangepayClient()
+@lru_cache(maxsize=1)
+def get_changepay_client() -> ChangepayClient:
+    """Return the ChangepayClient singleton. Cached for the process lifetime."""
+    return ChangepayClient()

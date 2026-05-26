@@ -42,6 +42,7 @@ backend/
 │   ├── main.py              # FastAPI app, CORS, router registration
 │   ├── config.py            # Pydantic settings (reads from .env)
 │   ├── database.py          # SQLAlchemy engine, session, Base
+│   ├── enums.py             # All discriminated-field enumerations (ProcessingStatus, QuizFormat…)
 │   ├── models/              # SQLAlchemy ORM models
 │   │   ├── user.py          # User, RefreshToken
 │   │   ├── document.py      # Document metadata (embeddings live in LangChain's tables)
@@ -49,7 +50,20 @@ backend/
 │   │   ├── chat.py          # ChatSession, ChatMessage
 │   │   ├── quiz.py          # Question, QuestionFeedback, QuizSession
 │   │   └── summary.py       # Summary
-│   ├── routers/             # HTTP layer — one file per domain
+│   ├── schemas/             # Pydantic request/response models (one file per domain)
+│   │   ├── auth.py          # TokenResponse, OtpLoginBody…
+│   │   ├── document.py      # DocumentOut, DocumentStatusOut
+│   │   ├── collection.py    # CollectionIn, CollectionOut
+│   │   ├── chat.py          # SessionCreate, SessionOut, MessageIn, MessageOut
+│   │   ├── quiz.py          # QuizCreate, QuizOut, QuestionOut, AnswerSubmit
+│   │   └── summary.py       # SummaryRequest, SummaryOut
+│   ├── repositories/        # Data access layer — all SQLAlchemy queries live here
+│   │   ├── document.py      # DocumentRepository
+│   │   ├── collection.py    # CollectionRepository
+│   │   ├── chat.py          # ChatRepository
+│   │   ├── quiz.py          # QuizRepository
+│   │   └── summary.py       # SummaryRepository
+│   ├── routers/             # HTTP layer — thin: validate input, call repo/service, return schema
 │   │   ├── auth.py
 │   │   ├── documents.py
 │   │   ├── collections.py
@@ -60,15 +74,15 @@ backend/
 │   │   ├── llm/                   # Chat provider abstraction (Strategy Pattern)
 │   │   │   ├── base.py            #   BaseChatProvider — abstract interface
 │   │   │   └── azure_openai.py    #   AzureOpenAIChatProvider — concrete impl
-│   │   ├── changepay.py     # ChangePay auth API client
+│   │   ├── changepay.py     # ChangePay auth API client + get_changepay_client() singleton
 │   │   ├── auth.py          # JWT + refresh token management
-│   │   ├── azure_openai.py  # Compat shim — delegates to llm/ (prefer importing from there)
+│   │   ├── azure_openai.py  # Compat shim — delegates to llm/
 │   │   ├── document_loader.py     # Strategy pattern: file-type loaders (PDF, DOCX, extensible)
 │   │   ├── document_processor.py  # Ingestion pipeline — file-type-agnostic orchestrator
 │   │   ├── langchain_setup.py     # Embeddings + vector store singletons (LangChain base types)
 │   │   ├── rag.py           # pgvector retrieval, context + citation building
 │   │   ├── quiz_engine.py   # Question bank, generation, short-answer eval
-│   │   └── storage.py       # File storage abstraction (local / Azure Blob)
+│   │   └── storage.py       # File storage — Strategy Pattern (Local, Azure Blob, extensible)
 │   └── middleware/
 │       └── auth.py          # get_current_user FastAPI dependency
 ├── alembic/                 # Migration scripts
@@ -88,7 +102,7 @@ Three concerns are deliberately kept behind stable interfaces so any implementat
 | **Chat LLM** | `BaseChatProvider` (`services/llm/base.py`) | `AzureOpenAIChatProvider` | Subclass `BaseChatProvider`, add an `elif` in `services/llm/__init__.py`, set `LLM_PROVIDER=<key>` |
 | **Embeddings** | LangChain `Embeddings` | `AzureOpenAIEmbeddings` | Replace the return value in `langchain_setup.get_embeddings()` |
 | **Vector store** | LangChain `VectorStore` | `PGVector` (PostgreSQL) | Replace the return value in `langchain_setup.get_vectorstore()` |
-| **File storage** | `save_file / load_file / delete_file` | Local filesystem / Azure Blob | See `services/storage.py` — set `STORAGE_BACKEND=azure` |
+| **File storage** | `BaseStorageBackend` (`services/storage.py`) | Local filesystem / Azure Blob | Subclass `BaseStorageBackend`, add `elif` in `get_storage_backend()`, set `STORAGE_BACKEND=<key>` |
 | **Document loaders** | `BaseDocumentLoader` (`services/document_loader.py`) | PDF, DOCX | `register_loader("ext", MyLoader())` |
 
 All providers are **process-level singletons** — `get_chat_provider()`, `get_embeddings()`, and `get_vectorstore()` each cache their instance on first call.
@@ -355,6 +369,7 @@ To roll back the last migration:
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | No | `15` | Access token lifetime |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | No | `7` | Refresh token lifetime (rolling) |
 | `LLM_PROVIDER` | No | `azure_openai` | Chat backend. Add a new `BaseChatProvider` subclass in `services/llm/` and register it in `services/llm/__init__.py` |
+| `CORS_ORIGINS` | No | `http://localhost:3000` | Comma-separated list of allowed CORS origins |
 | `CHANGEPAY_BASE_URL` | Yes | — | `https://api.test.changepay.in` (staging) or `https://api.changepay.in` (prod) |
 | `CHANGEPAY_TPID` | Yes | — | Third-party ID issued by ChangePay |
 | `AZURE_OPENAI_API_KEY` | Yes | — | Azure OpenAI API key |

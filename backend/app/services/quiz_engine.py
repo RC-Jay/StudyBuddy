@@ -5,9 +5,7 @@ Questions are stored in the question bank and reused across sessions.
 import json
 import uuid
 
-from sqlalchemy.orm import Session
-
-from app.models.quiz import Question, QuestionFeedback
+from app.models.quiz import Question
 from app.services.llm import get_chat_provider
 from app.services.rag import build_context, retrieve
 
@@ -25,7 +23,8 @@ Each object must have these fields:
 
 
 async def generate_questions(
-    db: Session,
+    quiz_repo,  # QuizRepository — avoid circular import with type hint
+    user_id: uuid.UUID,
     scope_type: str,
     scope_id: uuid.UUID,
     format: str,
@@ -33,26 +32,15 @@ async def generate_questions(
     count: int,
     topic_focus: str | None,
 ) -> list[Question]:
-    # First try to serve from the bank
-    flagged_subquery = db.query(QuestionFeedback.question_id).filter_by(flagged_bad_quality=True)
-    existing = (
-        db.query(Question)
-        .filter(
-            Question.scope_type == scope_type,
-            Question.scope_id == scope_id,
-            Question.format == format,
-            Question.difficulty == difficulty,
-            Question.id.notin_(flagged_subquery),
-        )
-        .all()
-    )
+    # Serve from the bank first; filter excludes questions flagged by THIS user only
+    existing = quiz_repo.get_bank_questions(scope_type, scope_id, format, difficulty, user_id)
 
     if len(existing) >= count:
         return existing[:count]
 
     needed = count - len(existing)
     query = topic_focus or f"{difficulty} level {format} questions"
-    chunks = await retrieve(db, query, scope_type, scope_id, top_k=8)
+    chunks = await retrieve(quiz_repo.db, query, scope_type, scope_id, top_k=8)
     if not chunks:
         return existing
 
@@ -95,9 +83,8 @@ Rules:
     except (json.JSONDecodeError, IndexError):
         return existing
 
-    new_questions = []
-    for item in items[:needed]:
-        q = Question(
+    new_questions = [
+        Question(
             scope_type=scope_type,
             scope_id=scope_id,
             format=item.get("format", format),
@@ -109,13 +96,10 @@ Rules:
             explanation=item["explanation"],
             source_page_range=item.get("source_page_range"),
         )
-        db.add(q)
-        new_questions.append(q)
+        for item in items[:needed]
+    ]
 
-    db.commit()
-    for q in new_questions:
-        db.refresh(q)
-
+    quiz_repo.bulk_add_questions(new_questions)
     return existing + new_questions
 
 

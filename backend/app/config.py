@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     azure_blob_connection_string: str = ""
     azure_blob_container: str = "studybuddy-documents"
 
+    # CORS — comma-separated list of allowed origins
+    # e.g. CORS_ORIGINS=http://localhost:3000,https://app.studybuddy.com
+    cors_origins: str = "http://localhost:3000"
+
     # App
     environment: str = "development"
     max_file_size_mb: int = 50
