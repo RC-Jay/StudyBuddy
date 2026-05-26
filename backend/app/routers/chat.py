@@ -10,7 +10,7 @@ from app.database import get_db
 from app.middleware.auth import get_current_user
 from app.models.chat import ChatMessage, ChatSession
 from app.models.user import User
-from app.services.azure_openai import chat_completion_stream
+from app.services.llm import get_chat_provider
 from app.services.rag import build_citations, build_context, retrieve
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -107,7 +107,7 @@ async def send_message(
     # Stream response and collect full text for persistence
     async def stream_and_save():
         full_response = []
-        async for chunk in chat_completion_stream(messages):
+        async for chunk in get_chat_provider().stream(messages):
             full_response.append(chunk)
             yield f"data: {json.dumps({'delta': chunk})}\n\n"
 

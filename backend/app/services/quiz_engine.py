@@ -8,7 +8,7 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.models.quiz import Question, QuestionFeedback
-from app.services.azure_openai import chat_completion
+from app.services.llm import get_chat_provider
 from app.services.rag import build_context, retrieve
 
 SYSTEM_PROMPT = """You are an exam question writer. Generate questions ONLY from the provided source material.
@@ -77,7 +77,7 @@ Rules:
 - Every explanation must cite the source document and page
 """
 
-    raw = await chat_completion(
+    raw = await get_chat_provider().complete(
         [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
@@ -134,7 +134,7 @@ Evaluate the student's answer. Respond with JSON:
   "correct_answer_summary": "concise correct answer"
 }}
 """
-    raw = await chat_completion(
+    raw = await get_chat_provider().complete(
         [
             {"role": "system", "content": "You are a fair and constructive exam grader. Respond only with the JSON object."},
             {"role": "user", "content": prompt},

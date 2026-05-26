@@ -13,10 +13,10 @@ FastAPI backend for StudyBuddy, an AI-powered study assistant for college studen
 | ORM | SQLAlchemy 2.0 |
 | Database | PostgreSQL 18 + pgvector |
 | Migrations | Alembic |
-| LLM | Azure OpenAI (GPT-4o-mini) |
-| Embeddings | Azure OpenAI (text-embedding-3-large, 3072-dim) |
+| LLM | Azure OpenAI GPT-4o-mini (swappable via `LLM_PROVIDER`) |
+| Embeddings | Azure OpenAI text-embedding-3-large, 3072-dim (swappable) |
 | Document ingestion | LangChain (pymupdf4llm for PDF, Docx2txtLoader for DOCX) |
-| Vector store | LangChain PGVector (langchain-postgres) |
+| Vector store | LangChain PGVector — langchain-postgres (swappable) |
 | File storage | Local filesystem (dev) — swap to Azure Blob via env var |
 | Auth | ChangePay credential APIs + StudyBuddy-issued JWT sessions |
 | Package manager | uv |
@@ -57,12 +57,15 @@ backend/
 │   │   ├── quiz.py
 │   │   └── summaries.py
 │   ├── services/            # Business logic layer
+│   │   ├── llm/                   # Chat provider abstraction (Strategy Pattern)
+│   │   │   ├── base.py            #   BaseChatProvider — abstract interface
+│   │   │   └── azure_openai.py    #   AzureOpenAIChatProvider — concrete impl
 │   │   ├── changepay.py     # ChangePay auth API client
 │   │   ├── auth.py          # JWT + refresh token management
-│   │   ├── azure_openai.py  # Embedding + chat completion wrappers
+│   │   ├── azure_openai.py  # Compat shim — delegates to llm/ (prefer importing from there)
 │   │   ├── document_loader.py     # Strategy pattern: file-type loaders (PDF, DOCX, extensible)
 │   │   ├── document_processor.py  # Ingestion pipeline — file-type-agnostic orchestrator
-│   │   ├── langchain_setup.py     # Shared LangChain config (embeddings, PGVector store)
+│   │   ├── langchain_setup.py     # Embeddings + vector store singletons (LangChain base types)
 │   │   ├── rag.py           # pgvector retrieval, context + citation building
 │   │   ├── quiz_engine.py   # Question bank, generation, short-answer eval
 │   │   └── storage.py       # File storage abstraction (local / Azure Blob)
@@ -73,6 +76,22 @@ backend/
 ├── pyproject.toml
 └── .env.example
 ```
+
+---
+
+## Provider Architecture
+
+Three concerns are deliberately kept behind stable interfaces so any implementation can be swapped without touching callers:
+
+| Concern | Interface | Current impl | How to swap |
+|---|---|---|---|
+| **Chat LLM** | `BaseChatProvider` (`services/llm/base.py`) | `AzureOpenAIChatProvider` | Subclass `BaseChatProvider`, add an `elif` in `services/llm/__init__.py`, set `LLM_PROVIDER=<key>` |
+| **Embeddings** | LangChain `Embeddings` | `AzureOpenAIEmbeddings` | Replace the return value in `langchain_setup.get_embeddings()` |
+| **Vector store** | LangChain `VectorStore` | `PGVector` (PostgreSQL) | Replace the return value in `langchain_setup.get_vectorstore()` |
+| **File storage** | `save_file / load_file / delete_file` | Local filesystem / Azure Blob | See `services/storage.py` — set `STORAGE_BACKEND=azure` |
+| **Document loaders** | `BaseDocumentLoader` (`services/document_loader.py`) | PDF, DOCX | `register_loader("ext", MyLoader())` |
+
+All providers are **process-level singletons** — `get_chat_provider()`, `get_embeddings()`, and `get_vectorstore()` each cache their instance on first call.
 
 ---
 
@@ -335,6 +354,7 @@ To roll back the last migration:
 | `JWT_ALGORITHM` | No | `HS256` | JWT signing algorithm |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | No | `15` | Access token lifetime |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | No | `7` | Refresh token lifetime (rolling) |
+| `LLM_PROVIDER` | No | `azure_openai` | Chat backend. Add a new `BaseChatProvider` subclass in `services/llm/` and register it in `services/llm/__init__.py` |
 | `CHANGEPAY_BASE_URL` | Yes | — | `https://api.test.changepay.in` (staging) or `https://api.changepay.in` (prod) |
 | `CHANGEPAY_TPID` | Yes | — | Third-party ID issued by ChangePay |
 | `AZURE_OPENAI_API_KEY` | Yes | — | Azure OpenAI API key |

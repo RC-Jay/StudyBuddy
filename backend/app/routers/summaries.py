@@ -8,7 +8,7 @@ from app.database import get_db
 from app.middleware.auth import get_current_user
 from app.models.summary import Summary
 from app.models.user import User
-from app.services.azure_openai import chat_completion
+from app.services.llm import get_chat_provider
 from app.services.rag import build_context, retrieve
 
 router = APIRouter(prefix="/summaries", tags=["summaries"])
@@ -55,7 +55,7 @@ async def generate_summary(
     context = build_context(chunks)
     instruction = PROMPTS[body.granularity].format(section_hint=body.section_hint or "")
 
-    content = await chat_completion(
+    content = await get_chat_provider().complete(
         [
             {
                 "role": "system",

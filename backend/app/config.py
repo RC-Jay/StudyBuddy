@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     changepay_base_url: str
     changepay_tpid: str
 
+    # LLM provider — selects which chat backend get_chat_provider() returns.
+    # Supported: azure_openai
+    # Add new values as implementations are added to app/services/llm/
+    llm_provider: str = "azure_openai"
+
     # Azure OpenAI
     azure_openai_api_key: str
     azure_openai_endpoint: str
