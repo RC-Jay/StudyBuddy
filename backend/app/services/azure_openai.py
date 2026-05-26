@@ -1,3 +1,7 @@
+"""
+Azure OpenAI wrappers for chat completion only.
+Embeddings are handled by LangChain (see langchain_setup.py).
+"""
 from openai import AsyncAzureOpenAI
 
 from app.config import settings
@@ -7,21 +11,6 @@ _chat_client = AsyncAzureOpenAI(
     azure_endpoint=settings.azure_openai_endpoint,
     api_version=settings.azure_openai_api_version,
 )
-
-_embedding_client = AsyncAzureOpenAI(
-    api_key=settings.azure_openai_api_key,
-    azure_endpoint=settings.azure_openai_endpoint,
-    api_version=settings.azure_openai_embedding_api_version,
-)
-
-
-async def get_embedding(text: str) -> list[float]:
-    text = text.replace("\n", " ")
-    response = await _embedding_client.embeddings.create(
-        input=[text],
-        model=settings.azure_openai_embedding_deployment,
-    )
-    return response.data[0].embedding
 
 
 async def chat_completion(messages: list[dict], temperature: float = 0.3) -> str:

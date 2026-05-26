@@ -15,7 +15,8 @@ FastAPI backend for StudyBuddy, an AI-powered study assistant for college studen
 | Migrations | Alembic |
 | LLM | Azure OpenAI (GPT-4o-mini) |
 | Embeddings | Azure OpenAI (text-embedding-3-large, 3072-dim) |
-| Document parsing | PyMuPDF (PDF), python-docx (DOCX) |
+| Document ingestion | LangChain (pymupdf4llm for PDF, Docx2txtLoader for DOCX) |
+| Vector store | LangChain PGVector (langchain-postgres) |
 | File storage | Local filesystem (dev) — swap to Azure Blob via env var |
 | Auth | ChangePay credential APIs + StudyBuddy-issued JWT sessions |
 | Package manager | uv |
@@ -43,7 +44,7 @@ backend/
 │   ├── database.py          # SQLAlchemy engine, session, Base
 │   ├── models/              # SQLAlchemy ORM models
 │   │   ├── user.py          # User, RefreshToken
-│   │   ├── document.py      # Document, DocumentChunk (+ pgvector embedding)
+│   │   ├── document.py      # Document metadata (embeddings live in LangChain's tables)
 │   │   ├── collection.py    # Collection, CollectionDocument
 │   │   ├── chat.py          # ChatSession, ChatMessage
 │   │   ├── quiz.py          # Question, QuestionFeedback, QuizSession
@@ -59,7 +60,9 @@ backend/
 │   │   ├── changepay.py     # ChangePay auth API client
 │   │   ├── auth.py          # JWT + refresh token management
 │   │   ├── azure_openai.py  # Embedding + chat completion wrappers
-│   │   ├── document_processor.py  # Text extraction, chunking, embedding
+│   │   ├── document_loader.py     # Strategy pattern: file-type loaders (PDF, DOCX, extensible)
+│   │   ├── document_processor.py  # Ingestion pipeline — file-type-agnostic orchestrator
+│   │   ├── langchain_setup.py     # Shared LangChain config (embeddings, PGVector store)
 │   │   ├── rag.py           # pgvector retrieval, context + citation building
 │   │   ├── quiz_engine.py   # Question bank, generation, short-answer eval
 │   │   └── storage.py       # File storage abstraction (local / Azure Blob)
@@ -176,14 +179,20 @@ All routes are prefixed with `/api/v1`. Protected routes require an `Authorizati
 | `DELETE` | `/documents/{id}` | Delete document — removes chunks, embeddings, and the file. |
 
 **Document processing pipeline (runs as a background task):**
-1. File content is read from storage
-2. Text is extracted page-by-page (PyMuPDF for PDF, python-docx for DOCX)
-3. Text is split into ~512-token chunks with 64-token overlap, respecting sentence boundaries
-4. Each chunk is embedded via Azure `text-embedding-3-large` (3072 dimensions)
-5. Chunks and embeddings are stored in `document_chunks` (pgvector column)
+1. Raw file bytes are loaded from storage
+2. A **loader strategy** is resolved for the file type (`document_loader.py`):
+   - PDF → `pymupdf4llm.LangChainPDFLoader` — one `Document` per page, content as Markdown (preserves headings, tables, lists)
+   - DOCX → `langchain-community` `Docx2txtLoader` — returns the full document as a single `Document`
+3. Pages are split into ~512-token chunks with 64-token overlap using LangChain's `RecursiveCharacterTextSplitter` (token count is exact via tiktoken `cl100k_base`)
+4. Each chunk's metadata is enriched with `document_id`, `document_title`, `chunk_index`, and `page`
+5. Chunks are embedded and persisted to pgvector via LangChain `PGVector` (`add_documents`)
 6. `document.processing_status` is updated to `ready` on success or `failed` on error
 
-Large documents (500+ pages) are supported — processing is batched to avoid memory issues. Poll `/status` to know when a document is ready to query.
+**LangChain-managed tables:** embeddings live in `langchain_pg_collection` and `langchain_pg_embedding` — these are created automatically by LangChain and excluded from Alembic autogenerate.
+
+**Adding a new file type** (e.g. `.txt`, `.pptx`): subclass `BaseDocumentLoader` in `document_loader.py` and call `register_loader("ext", MyLoader())`. No changes needed in `document_processor.py`.
+
+Poll `/status` to know when a document is ready to query.
 
 ---
 

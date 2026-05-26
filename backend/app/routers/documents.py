@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import datetime, timezone
 
@@ -8,9 +9,10 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.middleware.auth import get_current_user
-from app.models.document import Document, DocumentChunk
+from app.models.document import Document
 from app.models.user import User
 from app.services.document_processor import process_document
+from app.services.langchain_setup import delete_document_embeddings
 from app.services.storage import delete_file, save_file
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -99,12 +101,15 @@ def get_processing_status(document_id: uuid.UUID, db: Session = Depends(get_db),
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document(document_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     doc = _get_owned_doc(db, document_id, current_user.id)
-    # Delete chunks + embeddings first
-    db.query(DocumentChunk).filter_by(document_id=doc.id).delete()
-    # Soft-delete the record; blob cleanup runs below
+    # Remove embeddings from LangChain vector store
+    try:
+        await asyncio.to_thread(delete_document_embeddings, doc.id)
+    except Exception:
+        pass
+    # Soft-delete the document record
     doc.deleted_at = datetime.now(timezone.utc)
     db.commit()
-    # Best-effort blob removal — don't block the response
+    # Best-effort file removal
     try:
         await delete_file(doc.blob_path)
     except Exception:

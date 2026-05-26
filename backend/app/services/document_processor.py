@@ -1,88 +1,51 @@
 """
-Extracts text from PDF/DOCX, splits into chunks, generates embeddings, persists to DB.
-Designed to run in a FastAPI BackgroundTask — updates document.processing_status throughout.
-"""
-import io
-import re
-import uuid
-from datetime import datetime, timezone
+Document ingestion pipeline.
 
-import pdfplumber
-import pymupdf
-from docx import Document as DocxDocument
-from sqlalchemy.orm import Session
+Responsibilities:
+  1. Load raw bytes from storage
+  2. Delegate text extraction to the appropriate loader strategy (document_loader.py)
+  3. Split into overlapping chunks (RecursiveCharacterTextSplitter, token-accurate)
+  4. Embed and persist to pgvector via LangChain PGVector
+
+This module is intentionally file-type-agnostic — all format-specific logic
+lives in document_loader.py. Adding support for a new file type requires
+no changes here.
+
+Runs as a FastAPI BackgroundTask so the upload endpoint returns immediately.
+The client polls GET /documents/{id}/status to track progress.
+"""
+import asyncio
+import os
+import tempfile
+import uuid
+
+import tiktoken
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.database import SessionLocal
-from app.models.document import Document, DocumentChunk
-from app.services.azure_openai import get_embedding
+from app.models.document import Document
+from app.services.document_loader import get_loader
+from app.services.langchain_setup import get_vectorstore
 from app.services.storage import load_file
 
-CHUNK_SIZE = 512      # tokens (approximated as words * 1.3)
-CHUNK_OVERLAP = 64
+
+def _tiktoken_len(text: str) -> int:
+    """Token-accurate length function — cl100k_base is the encoding used by GPT-4o and text-embedding-3-large."""
+    return len(tiktoken.get_encoding("cl100k_base").encode(text))
 
 
-def _word_count(text: str) -> int:
-    return len(text.split())
-
-
-def _chunk_text(pages: list[tuple[int, str]]) -> list[tuple[int, str]]:
-    """
-    Takes a list of (page_number, page_text) pairs and returns
-    (page_number, chunk_text) pairs with overlap between consecutive chunks.
-    """
-    chunks: list[tuple[int, str]] = []
-    buffer_words: list[str] = []
-    buffer_page = 1
-    target_words = int(CHUNK_SIZE / 1.3)
-    overlap_words = int(CHUNK_OVERLAP / 1.3)
-
-    for page_num, text in pages:
-        sentences = re.split(r"(?<=[.!?])\s+", text.strip())
-        for sentence in sentences:
-            words = sentence.split()
-            if _word_count(" ".join(buffer_words)) + len(words) > target_words:
-                if buffer_words:
-                    chunks.append((buffer_page, " ".join(buffer_words)))
-                buffer_words = buffer_words[-overlap_words:] + words
-                buffer_page = page_num
-            else:
-                if not buffer_words:
-                    buffer_page = page_num
-                buffer_words.extend(words)
-
-    if buffer_words:
-        chunks.append((buffer_page, " ".join(buffer_words)))
-
-    return chunks
-
-
-def _extract_pdf(content: bytes) -> tuple[int, list[tuple[int, str]]]:
-    pages: list[tuple[int, str]] = []
-    doc = pymupdf.open(stream=content, filetype="pdf")
-    page_count = doc.page_count
-    for i, page in enumerate(doc, start=1):
-        text = page.get_text("text")
-        if text.strip():
-            pages.append((i, text))
-    doc.close()
-    return page_count, pages
-
-
-def _extract_docx(content: bytes) -> tuple[int, list[tuple[int, str]]]:
-    doc = DocxDocument(io.BytesIO(content))
-    full_text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-    # DOCX has no native pages — treat every ~500 words as a logical page
-    words = full_text.split()
-    page_size = 500
-    pages = []
-    for i in range(0, len(words), page_size):
-        page_num = i // page_size + 1
-        pages.append((page_num, " ".join(words[i : i + page_size])))
-    return len(pages), pages
+def _build_splitter() -> RecursiveCharacterTextSplitter:
+    return RecursiveCharacterTextSplitter(
+        chunk_size=512,
+        chunk_overlap=64,
+        length_function=_tiktoken_len,
+        # Tries each separator in order, only going smaller if the chunk is still too large
+        separators=["\n\n", "\n", ". ", "! ", "? ", " ", ""],
+    )
 
 
 async def process_document(document_id: uuid.UUID) -> None:
-    db: Session = SessionLocal()
+    db = SessionLocal()
     try:
         doc = db.get(Document, document_id)
         if not doc:
@@ -91,33 +54,42 @@ async def process_document(document_id: uuid.UUID) -> None:
         doc.processing_status = "processing"
         db.commit()
 
+        # 1. Load raw bytes from storage
         content = await load_file(doc.blob_path)
 
-        if doc.file_type == "pdf":
-            page_count, pages = _extract_pdf(content)
-        else:
-            page_count, pages = _extract_docx(content)
+        # 2. Write to a temp file — LangChain loaders work with file paths
+        with tempfile.NamedTemporaryFile(suffix=f".{doc.file_type}", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
 
-        doc.page_count = page_count
+        try:
+            # 3. Delegate to the registered loader strategy for this file type
+            loader = get_loader(doc.file_type)
+            pages = loader.load(tmp_path)
+        finally:
+            os.unlink(tmp_path)
+
+        doc.page_count = len(pages)
         db.commit()
 
-        chunks = _chunk_text(pages)
+        # 4. Split into overlapping chunks
+        chunks = _build_splitter().split_documents(pages)
 
-        for idx, (page_num, chunk_text) in enumerate(chunks):
-            embedding = await get_embedding(chunk_text)
-            db.add(
-                DocumentChunk(
-                    document_id=doc.id,
-                    content=chunk_text,
-                    page_number=page_num,
-                    chunk_index=idx,
-                    embedding=embedding,
-                )
-            )
-            if idx % 50 == 0:
-                db.commit()
+        # 5. Enrich chunk metadata for filtering at query time
+        for i, chunk in enumerate(chunks):
+            # pymupdf4llm sets metadata["page"] as 1-indexed already;
+            # ensure it is always present for all loaders
+            chunk.metadata.setdefault("page", None)
+            chunk.metadata.update({
+                "document_id": str(doc.id),
+                "document_title": doc.title,
+                "chunk_index": i,
+            })
 
-        db.commit()
+        # 6. Embed and store — PGVector.add_documents is sync, run in a thread
+        vectorstore = get_vectorstore()
+        await asyncio.to_thread(vectorstore.add_documents, chunks)
+
         doc.processing_status = "ready"
         db.commit()
 

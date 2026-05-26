@@ -18,8 +18,16 @@ config.set_main_option("sqlalchemy.url", settings.database_url)
 target_metadata = Base.metadata
 
 # Exclude PostGIS system tables from autogenerate
+EXCLUDED_TABLES = {
+    # PostGIS system tables
+    "spatial_ref_sys", "geography_columns", "geometry_columns",
+    "raster_columns", "raster_overviews",
+    # LangChain vector store tables (managed by LangChain, not Alembic)
+    "langchain_pg_collection", "langchain_pg_embedding",
+}
+
 def include_object(object, name, type_, reflected, compare_to):
-    if type_ == "table" and name in ("spatial_ref_sys", "geography_columns", "geometry_columns", "raster_columns", "raster_overviews"):
+    if type_ == "table" and name in EXCLUDED_TABLES:
         return False
     return True
 
