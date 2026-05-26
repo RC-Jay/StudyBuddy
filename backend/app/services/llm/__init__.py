@@ -42,4 +42,13 @@ def get_chat_provider() -> BaseChatProvider:
     )
 
 
-__all__ = ["BaseChatProvider", "get_chat_provider"]
+def get_provider_dep() -> BaseChatProvider:
+    """
+    FastAPI dependency — thin wrapper around get_chat_provider() so routers
+    can declare ``Depends(get_provider_dep)`` and tests can override it via
+    ``app.dependency_overrides[get_provider_dep]``.
+    """
+    return get_chat_provider()
+
+
+__all__ = ["BaseChatProvider", "get_chat_provider", "get_provider_dep"]

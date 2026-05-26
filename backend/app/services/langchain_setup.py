@@ -76,6 +76,15 @@ def get_vectorstore() -> VectorStore:
     )
 
 
+def get_vectorstore_dep() -> VectorStore:
+    """
+    FastAPI dependency — thin wrapper around get_vectorstore() so routers can
+    declare ``Depends(get_vectorstore_dep)`` and tests can override it via
+    ``app.dependency_overrides[get_vectorstore_dep]``.
+    """
+    return get_vectorstore()
+
+
 def delete_document_embeddings(document_id: uuid.UUID) -> None:
     """
     Remove all embeddings for a document from the LangChain vector store.

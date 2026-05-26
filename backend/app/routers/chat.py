@@ -3,13 +3,15 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from langchain_core.vectorstores import VectorStore
 
 from app.middleware.auth import get_current_user
 from app.models.chat import ChatMessage, ChatSession
 from app.models.user import User
 from app.repositories.chat import ChatRepository, get_chat_repo
 from app.schemas.chat import MessageIn, MessageOut, SessionCreate, SessionOut
-from app.services.llm import get_chat_provider
+from app.services.langchain_setup import get_vectorstore_dep
+from app.services.llm import BaseChatProvider, get_provider_dep
 from app.services.rag import build_citations, build_context, retrieve
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -60,6 +62,8 @@ async def send_message(
     session_id: uuid.UUID,
     body: MessageIn,
     repo: ChatRepository = Depends(get_chat_repo),
+    provider: BaseChatProvider = Depends(get_provider_dep),
+    vectorstore: VectorStore = Depends(get_vectorstore_dep),
     current_user: User = Depends(get_current_user),
 ):
     session = _require_owned(repo, session_id, current_user.id)
@@ -68,7 +72,10 @@ async def send_message(
     repo.add_message(ChatMessage(session_id=session.id, role="user", content=body.content))
 
     # Retrieve relevant chunks
-    chunks = await retrieve(repo.db, body.content, session.scope_type, session.scope_id)
+    chunks = await retrieve(
+        repo.db, body.content, session.scope_type, session.scope_id,
+        vectorstore=vectorstore,
+    )
     context = build_context(chunks)
     citations = build_citations(chunks)
 
@@ -84,7 +91,7 @@ async def send_message(
     # Stream response and persist the completed message
     async def stream_and_save():
         full_response: list[str] = []
-        async for chunk in get_chat_provider().stream(messages):
+        async for chunk in provider.stream(messages):
             full_response.append(chunk)
             yield f"data: {json.dumps({'delta': chunk})}\n\n"
 

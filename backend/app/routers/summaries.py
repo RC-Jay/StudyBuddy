@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
+from langchain_core.vectorstores import VectorStore
 
 from app.enums import SummaryGranularity
 from app.middleware.auth import get_current_user
@@ -8,7 +9,8 @@ from app.models.summary import Summary
 from app.models.user import User
 from app.repositories.summary import SummaryRepository, get_summary_repo
 from app.schemas.summary import SummaryOut, SummaryRequest
-from app.services.llm import get_chat_provider
+from app.services.langchain_setup import get_vectorstore_dep
+from app.services.llm import BaseChatProvider, get_provider_dep
 from app.services.rag import build_context, retrieve
 
 router = APIRouter(prefix="/summaries", tags=["summaries"])
@@ -25,13 +27,18 @@ _PROMPTS: dict[SummaryGranularity, str] = {
 async def generate_summary(
     body: SummaryRequest,
     repo: SummaryRepository = Depends(get_summary_repo),
+    provider: BaseChatProvider = Depends(get_provider_dep),
+    vectorstore: VectorStore = Depends(get_vectorstore_dep),
     current_user: User = Depends(get_current_user),
 ):
     if body.granularity == SummaryGranularity.SECTION and not body.section_hint:
         raise HTTPException(status_code=422, detail="section_hint is required when granularity is 'section'.")
 
     query = body.section_hint or f"{body.granularity} summary"
-    chunks = await retrieve(repo._db, query, body.scope_type, uuid.UUID(body.scope_id), top_k=10)
+    chunks = await retrieve(
+        repo._db, query, body.scope_type, uuid.UUID(body.scope_id),
+        top_k=10, vectorstore=vectorstore,
+    )
     if not chunks:
         raise HTTPException(
             status_code=422,
@@ -39,7 +46,7 @@ async def generate_summary(
         )
 
     instruction = _PROMPTS[body.granularity].format(section_hint=body.section_hint or "")
-    content = await get_chat_provider().complete(
+    content = await provider.complete(
         [
             {
                 "role": "system",

@@ -1,12 +1,14 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from langchain_core.vectorstores import VectorStore
 
 from app.middleware.auth import get_current_user
 from app.models.quiz import QuizSession
 from app.models.user import User
 from app.repositories.quiz import QuizRepository, get_quiz_repo
 from app.schemas.quiz import AnswerSubmit, QuestionOut, QuizCreate, QuizOut
+from app.services.langchain_setup import get_vectorstore_dep
 from app.services.quiz_engine import evaluate_short_answer, generate_questions
 from app.services.rag import build_context, retrieve
 
@@ -90,6 +92,7 @@ async def submit_quiz(
     session_id: uuid.UUID,
     body: AnswerSubmit,
     repo: QuizRepository = Depends(get_quiz_repo),
+    vectorstore: VectorStore = Depends(get_vectorstore_dep),
     current_user: User = Depends(get_current_user),
 ):
     session = _require_owned(repo, session_id, current_user.id)
@@ -111,7 +114,7 @@ async def submit_quiz(
             continue
 
         if q.format == "short_answer":
-            chunks = await retrieve(repo.db, q.stem, session.scope_type, session.scope_id, top_k=4)
+            chunks = await retrieve(repo.db, q.stem, session.scope_type, session.scope_id, top_k=4, vectorstore=vectorstore)
             eval_result = await evaluate_short_answer(q, user_answer, build_context(chunks))
             is_correct = eval_result.get("is_correct", False)
             score_contribution = eval_result.get("score", 0)

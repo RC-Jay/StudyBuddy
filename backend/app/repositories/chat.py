@@ -11,6 +11,11 @@ class ChatRepository:
     def __init__(self, db: Session) -> None:
         self._db = db
 
+    @property
+    def db(self) -> Session:
+        """Expose session for services that need it directly (e.g. rag.retrieve)."""
+        return self._db
+
     def get_owned_session(
         self, session_id: uuid.UUID, user_id: uuid.UUID
     ) -> ChatSession | None:

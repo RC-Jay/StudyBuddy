@@ -5,6 +5,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 
+from langchain_core.vectorstores import VectorStore
 from sqlalchemy.orm import Session
 
 from app.models.collection import CollectionDocument
@@ -27,7 +28,16 @@ async def retrieve(
     scope_type: str,
     scope_id: uuid.UUID,
     top_k: int = TOP_K,
+    *,
+    vectorstore: VectorStore | None = None,
 ) -> list[RetrievedChunk]:
+    """
+    Retrieve the top-k most relevant chunks for *query* from the vector store.
+
+    ``vectorstore`` is an optional keyword-only argument that allows callers
+    (routers, tests) to inject a specific VectorStore instance.  When omitted
+    the process-level singleton from ``get_vectorstore()`` is used.
+    """
     if scope_type == "document":
         filter_dict = {"document_id": str(scope_id)}
     else:
@@ -37,11 +47,11 @@ async def retrieve(
             return []
         filter_dict = {"document_id": {"$in": doc_ids}}
 
-    vectorstore = get_vectorstore()
+    vs = vectorstore if vectorstore is not None else get_vectorstore()
 
     # similarity_search_with_score is synchronous — run in a thread
     results = await asyncio.to_thread(
-        vectorstore.similarity_search_with_score,
+        vs.similarity_search_with_score,
         query,
         k=top_k,
         filter=filter_dict,
@@ -56,6 +66,7 @@ async def retrieve(
         )
         for doc, score in results
     ]
+
 
 
 def build_context(chunks: list[RetrievedChunk]) -> str:
