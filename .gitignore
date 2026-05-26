@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.env
+
+# Node
+node_modules/
+.next/
+.env.local
+
+# Uploads (local storage)
+backend/uploads/
+
+# OS
+.DS_Store
