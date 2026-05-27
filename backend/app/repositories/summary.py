@@ -15,7 +15,7 @@ class SummaryRepository:
         return (
             self._db.query(Summary)
             .filter_by(user_id=user_id)
-            .order_by(Summary.created_at.asc())
+            .order_by(Summary.sort_order.asc(), Summary.created_at.asc())
             .all()
         )
 

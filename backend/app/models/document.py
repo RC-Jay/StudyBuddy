@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -24,6 +24,7 @@ class Document(Base):
     processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     doc_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "book" | "research_paper"
     expected_summary_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    toc: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

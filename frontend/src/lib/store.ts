@@ -1,6 +1,6 @@
 import { create } from "zustand"
 import { persist, createJSONStorage } from "zustand/middleware"
-import type { User } from "./types"
+import type { TocItem, User } from "./types"
 
 export interface WorkspaceScope {
   type: "document" | "collection"
@@ -9,6 +9,7 @@ export interface WorkspaceScope {
   status?: "pending" | "processing" | "summarising" | "ready" | "failed"
   doc_type?: "book" | "research_paper"
   expected_summary_count?: number
+  toc?: TocItem[] | null
 }
 
 interface AppStore {

@@ -115,6 +115,7 @@ export default function LibraryPage() {
                   docType={scope.doc_type}
                   isSummarising={isSummarising}
                   expectedTotal={scope.expected_summary_count}
+                  toc={scope.toc}
                 />
               )}
               {effectiveTab === "quiz" && (

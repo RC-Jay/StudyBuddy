@@ -16,6 +16,7 @@ class DocumentOut(BaseModel):
     processing_error: str | None
     doc_type: str | None
     expected_summary_count: int | None
+    toc: list | None
     created_at: str
 
     @classmethod
@@ -31,6 +32,7 @@ class DocumentOut(BaseModel):
             processing_error=doc.processing_error,
             doc_type=doc.doc_type,
             expected_summary_count=doc.expected_summary_count,
+            toc=doc.toc,
             created_at=doc.created_at.isoformat(),
         )
 

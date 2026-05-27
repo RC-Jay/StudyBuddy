@@ -1,3 +1,23 @@
+// ─── TOC types ────────────────────────────────────────────────────────────────
+
+export interface TocChapter {
+  title: string
+  sections: string[]
+}
+
+/** One item in a document's table of contents.
+ *  type="part"    → top-level grouping (e.g. "Part I. Data Structures")
+ *                   has `chapters`, each with optional `sections`
+ *  type="chapter" → standalone chapter (no enclosing part)
+ *                   has `sections` (may be empty)
+ */
+export interface TocItem {
+  type: "part" | "chapter"
+  title: string
+  chapters?: TocChapter[]   // present when type="part"
+  sections?: string[]       // present when type="chapter"
+}
+
 export interface User {
   id: string
   email: string
@@ -21,6 +41,7 @@ export interface Document {
   processing_error: string | null
   doc_type: "book" | "research_paper" | null
   expected_summary_count: number | null
+  toc: TocItem[] | null
   created_at: string
 }
 

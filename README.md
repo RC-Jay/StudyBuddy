@@ -14,7 +14,7 @@ Ask questions about your uploaded material and get answers grounded strictly in 
 
 **Auto-generated summaries**  
 Summaries are generated automatically during document processing — no manual trigger needed.
-- *Books* — the pipeline detects chapter/section structure from the table of contents (with regex and equal-split fallbacks) and generates a summary per chapter or section. Summaries appear progressively as each chapter finishes.
+- *Books* — the pipeline extracts the table of contents using PyMuPDF font-size and coordinate analysis (no LLM required), falling back to an LLM parse, then a regex heading scan, then an equal-split as last resort. The extracted TOC is stored against the document and immediately rendered as a **Book Outline** in the Summaries tab — showing the full Part → Chapter → Section hierarchy before any summaries are generated. Summaries are then generated section by section and appear progressively as each one completes.
 - *Research papers* — generates a full prose summary and a numbered key-concepts list.
 
 **Quiz yourself**  
