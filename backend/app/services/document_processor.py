@@ -17,6 +17,8 @@ The client polls GET /documents/{id}/status to track progress.
 import asyncio
 import os
 import tempfile
+import threading
+import time
 import uuid
 
 import tiktoken
@@ -28,6 +30,34 @@ from app.models.document import Document
 from app.services.document_loader import get_loader
 from app.services.langchain_setup import get_vectorstore
 from app.services.storage import load_file
+
+
+# Only one document's embedding job runs at a time across all background tasks.
+# This prevents concurrent uploads from combining token usage and hitting the
+# Azure rate limit (250K tokens/min).
+_embed_lock = threading.Semaphore(1)
+
+# Stay comfortably under the 250K tokens/minute Azure rate limit.
+# At 512 tokens per chunk this allows ~390 chunks per batch.
+_EMBED_TOKEN_BUDGET = 200_000
+_CHUNK_TOKENS = 512  # matches chunk_size below
+
+
+def _add_documents_batched(vectorstore, chunks, lock: threading.Semaphore) -> None:
+    """Embed and store chunks in rate-limit-aware batches.
+
+    Holds the process-level lock for the entire duration so concurrent uploads
+    queue up rather than combining their token usage and hitting the Azure
+    per-minute cap. Chunks are split into batches of ~200K tokens; batches
+    for the same document are separated by a 65-second pause.
+    """
+    batch_size = max(1, _EMBED_TOKEN_BUDGET // _CHUNK_TOKENS)
+    with lock:
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i : i + batch_size]
+            vectorstore.add_documents(batch)
+            if i + batch_size < len(chunks):
+                time.sleep(65)
 
 
 def _tiktoken_len(text: str) -> int:
@@ -87,9 +117,9 @@ async def process_document(document_id: uuid.UUID) -> None:
                 "chunk_index": i,
             })
 
-        # 6. Embed and store — PGVector.add_documents is sync, run in a thread
+        # 6. Embed and store — serialised across concurrent uploads via _embed_lock
         vectorstore = get_vectorstore()
-        await asyncio.to_thread(vectorstore.add_documents, chunks)
+        await asyncio.to_thread(_add_documents_batched, vectorstore, chunks, _embed_lock)
 
         doc.processing_status = ProcessingStatus.READY
         db.commit()
