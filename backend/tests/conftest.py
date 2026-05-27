@@ -171,6 +171,7 @@ def test_document(db, test_user) -> Document:
     doc = Document(
         id=uuid.uuid4(),
         user_id=test_user.id,
+        file_name="Test Document",
         title="Test Document",
         file_type="pdf",
         file_size_bytes=1024,

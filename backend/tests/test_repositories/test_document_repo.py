@@ -22,6 +22,7 @@ def _new_doc(user_id: uuid.UUID, title: str = "Test Doc") -> Document:
     return Document(
         id=uuid.uuid4(),
         user_id=user_id,
+        file_name=title,
         title=title,
         file_type="pdf",
         file_size_bytes=512,

@@ -6,7 +6,7 @@ are stored:
 
   summarise_book(doc, pages, db, provider, vectorstore)
     Three-stage chapter detection:
-      1. Hierarchical LLM TOC extraction from pages 0–20
+      1. Locate TOC pages via header + entry-line heuristics, then LLM parse
       2. Regex heading scan across all pages
       3. Equal-split fallback (4 parts)
     Produces one Summary row per section/chapter with granularity=CHAPTER.
@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-_TOC_SCAN_PAGES = 20         # pages fed to LLM for TOC extraction
+_TOC_SEARCH_LIMIT = 50       # max pages to scan when locating the TOC
+_TOC_MAX_SPAN = 25           # max pages a TOC section is allowed to span
 _PAPER_MAX_PAGES = 50        # max pages used for paper summarisation
 _RETRIEVAL_TOP_K_CHAPTER = 50
 _RETRIEVAL_TOP_K_SECTION = 30
@@ -99,18 +100,78 @@ Include 8–15 concepts. Cover both technical terms and high-level themes.
 
 # ─── TOC Detection ────────────────────────────────────────────────────────────
 
+# Matches a TOC header line ("Contents", "Table of Contents", etc.)
+_TOC_HEADER_RE = re.compile(
+    r"^\s*(table\s+of\s+)?contents\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# A TOC entry line: some text followed by a page number at the end.
+# e.g. "1. The Python Data Model ........ 5"  or  "Chapter 1   3"
+_TOC_ENTRY_RE = re.compile(
+    r"^.{3,80}[\s.\-]{1,10}\d{1,4}\s*$",
+    re.MULTILINE,
+)
+
+
+def _locate_toc_pages(pages: list[LCDocument]) -> list[LCDocument]:
+    """
+    Scan the front matter for the Table of Contents and return only those pages.
+
+    Algorithm:
+      1. Find the first page (within _TOC_SEARCH_LIMIT) whose text contains a
+         TOC header ("Contents" / "Table of Contents").
+      2. From that page onward, keep collecting pages that have at least one
+         TOC-entry line (text + trailing page-number).
+      3. Stop as soon as a page has no TOC entries or we exceed _TOC_MAX_SPAN.
+      4. If no TOC header is found, fall back to the first _TOC_SEARCH_LIMIT pages
+         so the LLM still has a chance on books with non-standard front matter.
+    """
+    scan_limit = min(_TOC_SEARCH_LIMIT, len(pages))
+    toc_start: int | None = None
+
+    for i, page in enumerate(pages[:scan_limit]):
+        if _TOC_HEADER_RE.search(page.page_content):
+            toc_start = i
+            break
+
+    if toc_start is None:
+        logger.debug("No TOC header found in first %d pages", scan_limit)
+        return []
+
+    toc_pages: list[LCDocument] = []
+    for page in pages[toc_start : toc_start + _TOC_MAX_SPAN]:
+        if _TOC_ENTRY_RE.search(page.page_content):
+            toc_pages.append(page)
+        elif toc_pages:
+            # Had TOC content before but this page has none — we've left the TOC.
+            break
+
+    if not toc_pages:
+        # Header found but no parseable entries — include the header page itself
+        # plus a few following pages and let the LLM figure it out.
+        toc_pages = pages[toc_start : toc_start + 5]
+
+    logger.info(
+        "TOC located at page %d, spanning %d page(s)", toc_start, len(toc_pages)
+    )
+    return toc_pages
+
+
 async def _extract_toc_llm(
     pages: list[LCDocument],
     provider: BaseChatProvider,
 ) -> list[dict]:
     """
-    Stage 1: Ask the LLM to extract a hierarchical TOC from pages 0–_TOC_SCAN_PAGES.
+    Stage 1: Detect the TOC page range, then ask the LLM to parse it.
     Returns list of {"title": ..., "sections": [...]} dicts, or [] on failure.
     """
-    sample = pages[:_TOC_SCAN_PAGES]
-    text = "\n\n---\n\n".join(p.page_content for p in sample)
-    if len(text) > 40000:
-        text = text[:40000]
+    toc_pages = _locate_toc_pages(pages)
+    if not toc_pages:
+        logger.info("No TOC pages found — skipping LLM extraction, falling to Stage 2")
+        return []
+
+    text = "\n\n---\n\n".join(p.page_content for p in toc_pages)
 
     messages = [
         {"role": "system", "content": _TOC_EXTRACTION_SYSTEM},

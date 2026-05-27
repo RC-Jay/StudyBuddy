@@ -38,6 +38,7 @@ class TestGetDocument:
         other_doc = Document(
             id=uuid.uuid4(),
             user_id=other_user.id,
+            file_name="Other's Doc",
             title="Other's Doc",
             file_type="pdf",
             file_size_bytes=100,
