@@ -2,20 +2,21 @@
 
 import { useState, useEffect, useRef } from "react"
 import Image from "next/image"
-import { Upload, Trash2, FileText, Loader2, Plus, FolderOpen, LogOut, ChevronDown, ChevronUp } from "lucide-react"
+import { Upload, Trash2, FileText, Loader2, Plus, FolderOpen, LogOut, ChevronDown, ChevronUp, AlertCircle } from "lucide-react"
 import api from "@/lib/api"
 import { useAuthStore } from "@/lib/store"
 import { logout } from "@/lib/auth"
 import { useRouter } from "next/navigation"
 import type { Document, Collection } from "@/lib/types"
 
-function statusDot(status: Document["processing_status"]) {
-  return {
-    pending: "bg-yellow-400",
-    processing: "bg-blue-400 animate-pulse",
-    ready: "bg-green-400",
-    failed: "bg-red-400",
-  }[status]
+function DocStatusIndicator({ status }: { status: Document["processing_status"] }) {
+  if (status === "processing" || status === "pending") {
+    return <Loader2 className="h-3 w-3 shrink-0 animate-spin text-blue-400" />
+  }
+  if (status === "failed") {
+    return <AlertCircle className="h-3 w-3 shrink-0 text-red-400" />
+  }
+  return <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-green-400" />
 }
 
 export function LibrarySidebar() {
@@ -33,7 +34,17 @@ export function LibrarySidebar() {
   const fileRef = useRef<HTMLInputElement>(null)
 
   function fetchDocs() {
-    api.get<Document[]>("/documents").then(({ data }) => setDocs(data))
+    api.get<Document[]>("/documents").then(({ data }) => {
+      setDocs(data)
+      // Keep scope status in sync when a selected doc transitions (e.g. processing → ready)
+      const currentScope = useAuthStore.getState().scope
+      if (currentScope?.type === "document") {
+        const updated = data.find((d) => d.id === currentScope.id)
+        if (updated && updated.processing_status !== currentScope.status) {
+          setScope({ ...currentScope, status: updated.processing_status })
+        }
+      }
+    })
   }
 
   useEffect(() => {
@@ -46,9 +57,15 @@ export function LibrarySidebar() {
       (d) => d.processing_status === "pending" || d.processing_status === "processing"
     )
     if (!processing) return
-    const t = setTimeout(fetchDocs, 5000)
+    const t = setTimeout(fetchDocs, 60000)
     return () => clearTimeout(t)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docs])
+
+  function selectDoc(doc: Document) {
+    if (doc.processing_status !== "ready") return
+    setScope({ type: "document", id: doc.id, name: doc.title, status: doc.processing_status })
+  }
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -118,29 +135,40 @@ export function LibrarySidebar() {
 
           {docsExpanded && (
             <div>
-              {docs.map((doc) => (
-                <button
-                  key={doc.id}
-                  onClick={() => setScope({ type: "document", id: doc.id, name: doc.title })}
-                  className={`group flex w-full items-center gap-2.5 px-4 py-2 text-left text-sm transition-colors ${
-                    scope?.id === doc.id
-                      ? "bg-indigo-50 text-indigo-700"
-                      : "text-gray-700 hover:bg-gray-50"
-                  }`}
-                >
-                  <span
-                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusDot(doc.processing_status)}`}
-                  />
-                  <span className="flex-1 truncate">{doc.title}</span>
-                  <span
-                    role="button"
-                    onClick={(e) => handleDeleteDoc(doc.id, e)}
-                    className="hidden shrink-0 rounded p-0.5 text-gray-300 hover:text-red-500 group-hover:block"
+              {docs.map((doc) => {
+                const isReady = doc.processing_status === "ready"
+                const isSelected = scope?.id === doc.id
+                return (
+                  <div
+                    key={doc.id}
+                    onClick={() => selectDoc(doc)}
+                    className={`group flex w-full items-center gap-2.5 px-4 py-2 text-sm transition-colors ${
+                      isReady ? "cursor-pointer" : "cursor-default"
+                    } ${
+                      isSelected
+                        ? "bg-indigo-50 text-indigo-700"
+                        : isReady
+                        ? "text-gray-700 hover:bg-gray-50"
+                        : "text-gray-400"
+                    }`}
                   >
-                    <Trash2 className="h-3 w-3" />
-                  </span>
-                </button>
-              ))}
+                    <DocStatusIndicator status={doc.processing_status} />
+                    <span className="flex-1 truncate">{doc.title}</span>
+                    {doc.processing_status === "failed" && (
+                      <span className="shrink-0 rounded bg-red-50 px-1 py-0.5 text-xs text-red-500">
+                        failed
+                      </span>
+                    )}
+                    <span
+                      role="button"
+                      onClick={(e) => handleDeleteDoc(doc.id, e)}
+                      className="hidden shrink-0 rounded p-0.5 text-gray-300 hover:text-red-500 group-hover:block"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </span>
+                  </div>
+                )
+              })}
               {docs.length === 0 && (
                 <p className="px-4 py-2 text-xs text-gray-400">No documents yet</p>
               )}

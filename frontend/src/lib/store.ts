@@ -5,6 +5,7 @@ export interface WorkspaceScope {
   type: "document" | "collection"
   id: string
   name: string
+  status?: "pending" | "processing" | "ready" | "failed"
 }
 
 interface AppStore {

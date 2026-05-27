@@ -38,15 +38,14 @@ class BaseDocumentLoader(ABC):
 
 class PDFLoader(BaseDocumentLoader):
     """
-    PDF loader using pymupdf4llm — PyMuPDF's first-party LangChain integration.
-    Returns one Document per page. Converts content to Markdown which preserves
-    headings, tables, and lists better than plain text extraction.
-    metadata["page"] is 1-indexed.
+    PDF loader using LangChain's PyMuPDFLoader (pymupdf).
+    Returns one Document per page with metadata["page"] as 0-indexed page number.
+    Handles complex layouts (tables, columns, multi-column papers) well.
     """
 
     def load(self, file_path: str) -> list[LCDocument]:
-        from pymupdf4llm import LangChainPDFLoader
-        return LangChainPDFLoader(file_path).load()
+        from langchain_community.document_loaders import PyMuPDFLoader
+        return PyMuPDFLoader(file_path).load()
 
 
 class DocxLoader(BaseDocumentLoader):
