@@ -99,8 +99,8 @@ export function LibrarySidebar() {
       const currentScope = useAuthStore.getState().scope
       if (currentScope?.type === "document") {
         const updated = data.find((d) => d.id === currentScope.id)
-        if (updated && updated.processing_status !== currentScope.status) {
-          setScope({ ...currentScope, status: updated.processing_status })
+        if (updated && (updated.processing_status !== currentScope.status || updated.expected_summary_count !== currentScope.expected_summary_count)) {
+          setScope({ ...currentScope, status: updated.processing_status, expected_summary_count: updated.expected_summary_count ?? undefined })
         }
       }
     })
@@ -131,6 +131,7 @@ export function LibrarySidebar() {
       name: doc.title,
       status: doc.processing_status,
       doc_type: doc.doc_type ?? undefined,
+      expected_summary_count: doc.expected_summary_count ?? undefined,
     })
   }
 

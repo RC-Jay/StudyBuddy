@@ -10,19 +10,49 @@ interface Props {
   scopeId: string
   docType?: "book" | "research_paper"
   isSummarising?: boolean
+  expectedTotal?: number
 }
 
-// ─── Book layout helpers ───────────────────────────────────────────────────
+
+// ─── Progress bar ──────────────────────────────────────────────────────────
+
+function GeneratingBar({ done, total }: { done: number; total?: number }) {
+  const pct = total ? Math.min(100, Math.round((done / total) * 100)) : null
+
+  return (
+    <div className="shrink-0 border-b border-indigo-100 bg-indigo-50 px-4 py-2.5">
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-xs font-medium text-indigo-600">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Generating summaries…
+        </span>
+        <span className="text-xs text-indigo-500">
+          {total ? `${done} / ${total} done` : `${done} ready`}
+        </span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-indigo-100">
+        {pct !== null ? (
+          <div
+            className="h-full rounded-full bg-indigo-500 transition-all duration-700"
+            style={{ width: `${pct}%` }}
+          />
+        ) : (
+          <div className="h-full w-2/5 rounded-full bg-indigo-400 [animation:slide-x_1.6s_ease-in-out_infinite]" />
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Book layout ───────────────────────────────────────────────────────────
 
 interface TreeNode {
   title: string
-  summary: Summary | null      // null for chapter headers that have sub-sections
+  summary: Summary | null
   children: TreeNode[]
 }
 
 function buildTree(summaries: Summary[]): TreeNode[] {
-  // All summaries with section_hint containing ">" are section-level.
-  // Those without ">" are chapter-level.
   const chapterMap = new Map<string, TreeNode>()
   const roots: TreeNode[] = []
 
@@ -35,13 +65,8 @@ function buildTree(summaries: Summary[]): TreeNode[] {
         chapterMap.set(chTitle, node)
         roots.push(node)
       }
-      chapterMap.get(chTitle)!.children.push({
-        title: secTitle,
-        summary: s,
-        children: [],
-      })
+      chapterMap.get(chTitle)!.children.push({ title: secTitle, summary: s, children: [] })
     } else {
-      // No ">": flat chapter node (leaf)
       if (!chapterMap.has(s.section_hint)) {
         const node: TreeNode = { title: s.section_hint, summary: s, children: [] }
         chapterMap.set(s.section_hint, node)
@@ -52,16 +77,14 @@ function buildTree(summaries: Summary[]): TreeNode[] {
   return roots
 }
 
-function BookLayout({ summaries }: { summaries: Summary[] }) {
+function BookLayout({ summaries, isSummarising, expectedTotal }: { summaries: Summary[]; isSummarising?: boolean; expectedTotal?: number }) {
   const tree = buildTree(summaries)
   const [expanded, setExpanded] = useState<Set<string>>(() => {
-    // Expand all chapters by default
     const s = new Set<string>()
     tree.forEach((n) => s.add(n.title))
     return s
   })
   const [selected, setSelected] = useState<Summary | null>(() => {
-    // Select first leaf by default
     for (const node of tree) {
       if (node.summary) return node.summary
       if (node.children.length > 0 && node.children[0].summary)
@@ -80,73 +103,82 @@ function BookLayout({ summaries }: { summaries: Summary[] }) {
   }
 
   return (
-    <div className="flex flex-1 overflow-hidden">
-      {/* Chapter tree */}
-      <aside className="flex w-56 shrink-0 flex-col overflow-y-auto border-r border-gray-100 bg-gray-50 py-2">
-        {tree.map((chapter) =>
-          chapter.children.length > 0 ? (
-            // Chapter with sub-sections
-            <div key={chapter.title}>
+    <div className="flex flex-1 flex-col overflow-hidden">
+      {isSummarising && <GeneratingBar done={summaries.length} total={expectedTotal} />}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Chapter tree */}
+        <aside className="flex w-56 shrink-0 flex-col overflow-y-auto border-r border-gray-100 bg-gray-50 py-2">
+          {tree.map((chapter) =>
+            chapter.children.length > 0 ? (
+              <div key={chapter.title}>
+                <button
+                  onClick={() => toggle(chapter.title)}
+                  className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs font-semibold text-gray-500 hover:text-gray-700"
+                >
+                  {expanded.has(chapter.title) ? (
+                    <ChevronDown className="h-3 w-3 shrink-0" />
+                  ) : (
+                    <ChevronRight className="h-3 w-3 shrink-0" />
+                  )}
+                  <span className="truncate">{chapter.title}</span>
+                </button>
+                {expanded.has(chapter.title) &&
+                  chapter.children.map((sec) => (
+                    <button
+                      key={sec.title}
+                      onClick={() => sec.summary && setSelected(sec.summary)}
+                      className={`w-full py-1.5 pl-7 pr-3 text-left text-xs transition-colors hover:bg-white ${
+                        selected?.id === sec.summary?.id
+                          ? "bg-white font-medium text-indigo-700"
+                          : "text-gray-600"
+                      }`}
+                    >
+                      <span className="truncate block">{sec.title}</span>
+                    </button>
+                  ))}
+              </div>
+            ) : (
               <button
-                onClick={() => toggle(chapter.title)}
-                className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs font-semibold text-gray-500 hover:text-gray-700"
+                key={chapter.title}
+                onClick={() => chapter.summary && setSelected(chapter.summary)}
+                className={`flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs transition-colors hover:bg-white ${
+                  selected?.id === chapter.summary?.id
+                    ? "bg-white font-medium text-indigo-700"
+                    : "text-gray-600"
+                }`}
               >
-                {expanded.has(chapter.title) ? (
-                  <ChevronDown className="h-3 w-3 shrink-0" />
-                ) : (
-                  <ChevronRight className="h-3 w-3 shrink-0" />
-                )}
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-gray-300" />
                 <span className="truncate">{chapter.title}</span>
               </button>
-              {expanded.has(chapter.title) &&
-                chapter.children.map((sec) => (
-                  <button
-                    key={sec.title}
-                    onClick={() => sec.summary && setSelected(sec.summary)}
-                    className={`w-full py-1.5 pl-7 pr-3 text-left text-xs transition-colors hover:bg-white ${
-                      selected?.id === sec.summary?.id
-                        ? "bg-white font-medium text-indigo-700"
-                        : "text-gray-600"
-                    }`}
-                  >
-                    <span className="truncate block">{sec.title}</span>
-                  </button>
-                ))}
+            )
+          )}
+
+          {/* Animated placeholder at the bottom of the tree while generating */}
+          {isSummarising && (
+            <div className="flex items-center gap-1.5 px-3 py-2 text-xs text-indigo-400">
+              <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+              <span className="truncate">More coming…</span>
+            </div>
+          )}
+        </aside>
+
+        {/* Content panel */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {selected ? (
+            <div className="mx-auto max-w-2xl">
+              <h2 className="mb-4 text-sm font-semibold text-gray-700">
+                {selected.section_hint}
+              </h2>
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-800">
+                {selected.content}
+              </p>
             </div>
           ) : (
-            // Flat chapter (leaf)
-            <button
-              key={chapter.title}
-              onClick={() => chapter.summary && setSelected(chapter.summary)}
-              className={`flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs transition-colors hover:bg-white ${
-                selected?.id === chapter.summary?.id
-                  ? "bg-white font-medium text-indigo-700"
-                  : "text-gray-600"
-              }`}
-            >
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-gray-300" />
-              <span className="truncate">{chapter.title}</span>
-            </button>
-          )
-        )}
-      </aside>
-
-      {/* Content panel */}
-      <div className="flex-1 overflow-y-auto p-6">
-        {selected ? (
-          <div className="mx-auto max-w-2xl">
-            <h2 className="mb-4 text-sm font-semibold text-gray-700">
-              {selected.section_hint}
-            </h2>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-800">
-              {selected.content}
-            </p>
-          </div>
-        ) : (
-          <div className="flex h-full items-center justify-center text-gray-400">
-            <p className="text-sm">Select a chapter to read its summary</p>
-          </div>
-        )}
+            <div className="flex h-full items-center justify-center text-gray-400">
+              <p className="text-sm">Select a chapter to read its summary</p>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -154,35 +186,63 @@ function BookLayout({ summaries }: { summaries: Summary[] }) {
 
 // ─── Research paper layout ─────────────────────────────────────────────────
 
-function PaperLayout({ summaries }: { summaries: Summary[] }) {
+function PaperLayout({ summaries, isSummarising, expectedTotal }: { summaries: Summary[]; isSummarising?: boolean; expectedTotal?: number }) {
   const fullSummary = summaries.find((s) => s.granularity === "full")
   const concepts = summaries.find((s) => s.granularity === "concepts")
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="mx-auto max-w-2xl space-y-6">
-        {fullSummary && (
-          <div className="rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-200">
-            <div className="mb-3 flex items-center gap-2">
-              <FileText className="h-4 w-4 text-indigo-500" />
-              <span className="text-sm font-semibold text-gray-700">Summary</span>
+    <div className="flex flex-1 flex-col overflow-hidden">
+      {isSummarising && <GeneratingBar done={summaries.length} total={expectedTotal} />}
+      <div className="flex-1 overflow-y-auto p-6">
+        <div className="mx-auto max-w-2xl space-y-6">
+          {fullSummary ? (
+            <div className="rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-200">
+              <div className="mb-3 flex items-center gap-2">
+                <FileText className="h-4 w-4 text-indigo-500" />
+                <span className="text-sm font-semibold text-gray-700">Summary</span>
+              </div>
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-800">
+                {fullSummary.content}
+              </p>
             </div>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-800">
-              {fullSummary.content}
-            </p>
-          </div>
-        )}
-        {concepts && (
-          <div className="rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-200">
-            <div className="mb-3 flex items-center gap-2">
-              <FileText className="h-4 w-4 text-purple-500" />
-              <span className="text-sm font-semibold text-gray-700">Key Concepts</span>
+          ) : isSummarising ? (
+            <div className="rounded-xl bg-white p-6 shadow-sm ring-1 ring-indigo-100">
+              <div className="mb-3 flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin text-indigo-400" />
+                <span className="text-sm font-semibold text-gray-400">Summary generating…</span>
+              </div>
+              <div className="space-y-2">
+                <div className="h-3 w-full animate-pulse rounded bg-gray-100" />
+                <div className="h-3 w-5/6 animate-pulse rounded bg-gray-100" />
+                <div className="h-3 w-4/6 animate-pulse rounded bg-gray-100" />
+              </div>
             </div>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-800">
-              {concepts.content}
-            </p>
-          </div>
-        )}
+          ) : null}
+
+          {concepts ? (
+            <div className="rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-200">
+              <div className="mb-3 flex items-center gap-2">
+                <FileText className="h-4 w-4 text-purple-500" />
+                <span className="text-sm font-semibold text-gray-700">Key Concepts</span>
+              </div>
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-800">
+                {concepts.content}
+              </p>
+            </div>
+          ) : isSummarising ? (
+            <div className="rounded-xl bg-white p-6 shadow-sm ring-1 ring-indigo-100">
+              <div className="mb-3 flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin text-purple-400" />
+                <span className="text-sm font-semibold text-gray-400">Key Concepts generating…</span>
+              </div>
+              <div className="space-y-2">
+                <div className="h-3 w-full animate-pulse rounded bg-gray-100" />
+                <div className="h-3 w-3/4 animate-pulse rounded bg-gray-100" />
+                <div className="h-3 w-5/6 animate-pulse rounded bg-gray-100" />
+              </div>
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   )
@@ -190,7 +250,7 @@ function PaperLayout({ summaries }: { summaries: Summary[] }) {
 
 // ─── Main component ────────────────────────────────────────────────────────
 
-export function SummariseTab({ scopeType, scopeId, docType, isSummarising }: Props) {
+export function SummariseTab({ scopeType, scopeId, docType, isSummarising, expectedTotal }: Props) {
   const [summaries, setSummaries] = useState<Summary[]>([])
   // loading starts true; component remounts on scope change (key={scope.id} in parent)
   const [loading, setLoading] = useState(true)
@@ -238,23 +298,25 @@ export function SummariseTab({ scopeType, scopeId, docType, isSummarising }: Pro
 
   if (summaries.length === 0) {
     return (
-      <div className="flex flex-1 items-center justify-center text-gray-400">
-        <div className="text-center">
-          <Loader2 className="mx-auto mb-3 h-8 w-8 animate-spin text-indigo-300" />
-          <p className="text-sm font-medium text-gray-500">
-            {isSummarising ? "Generating first summaries…" : "No summaries yet"}
-          </p>
-          <p className="mt-1 text-xs text-gray-400">
-            {isSummarising
-              ? "Sections will appear here as they are ready."
-              : "Summaries are generated automatically when a document is processed."}
-          </p>
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {isSummarising && <GeneratingBar done={0} total={expectedTotal} />}
+        <div className="flex flex-1 items-center justify-center text-gray-400">
+          <div className="text-center">
+            <Loader2 className="mx-auto mb-3 h-8 w-8 animate-spin text-indigo-300" />
+            <p className="text-sm font-medium text-gray-500">
+              {isSummarising ? "Generating first summaries…" : "No summaries yet"}
+            </p>
+            <p className="mt-1 text-xs text-gray-400">
+              {isSummarising
+                ? "Sections will appear here as they are ready."
+                : "Summaries are generated automatically when a document is processed."}
+            </p>
+          </div>
         </div>
       </div>
     )
   }
 
-  // Infer layout from doc_type prop or from granularity of existing summaries
   const effectiveDocType =
     docType ??
     (summaries.some((s) => s.granularity === "chapter") ? "book" : "research_paper")
@@ -262,9 +324,9 @@ export function SummariseTab({ scopeType, scopeId, docType, isSummarising }: Pro
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {effectiveDocType === "book" ? (
-        <BookLayout summaries={summaries} />
+        <BookLayout summaries={summaries} isSummarising={isSummarising} expectedTotal={expectedTotal} />
       ) : (
-        <PaperLayout summaries={summaries} />
+        <PaperLayout summaries={summaries} isSummarising={isSummarising} expectedTotal={expectedTotal} />
       )}
     </div>
   )

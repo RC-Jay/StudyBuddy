@@ -14,6 +14,7 @@ class DocumentOut(BaseModel):
     processing_status: ProcessingStatus
     processing_error: str | None
     doc_type: str | None
+    expected_summary_count: int | None
     created_at: str
 
     @classmethod
@@ -27,6 +28,7 @@ class DocumentOut(BaseModel):
             processing_status=doc.processing_status,
             processing_error=doc.processing_error,
             doc_type=doc.doc_type,
+            expected_summary_count=doc.expected_summary_count,
             created_at=doc.created_at.isoformat(),
         )
 

@@ -80,17 +80,6 @@ export default function LibraryPage() {
             )}
           </div>
 
-          {/* Summarising banner — shown above tab content */}
-          {isSummarising && (
-            <div className="flex items-center gap-2 border-b border-indigo-100 bg-indigo-50 px-6 py-2">
-              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-indigo-500" />
-              <p className="text-xs text-indigo-700">
-                Generating summaries in the background — Chat and Quiz are ready to use.
-                Summaries will appear as each section completes.
-              </p>
-            </div>
-          )}
-
           {/* Processing / failed state */}
           {scope.status === "processing" || scope.status === "pending" ? (
             <div className="flex flex-1 items-center justify-center">
@@ -125,6 +114,7 @@ export default function LibraryPage() {
                   scopeId={scope.id}
                   docType={scope.doc_type}
                   isSummarising={isSummarising}
+                  expectedTotal={scope.expected_summary_count}
                 />
               )}
               {effectiveTab === "quiz" && (

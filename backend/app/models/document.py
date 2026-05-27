@@ -22,6 +22,7 @@ class Document(Base):
     processing_status: Mapped[str] = mapped_column(String(20), default="pending")  # pending|processing|ready|failed
     processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     doc_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "book" | "research_paper"
+    expected_summary_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

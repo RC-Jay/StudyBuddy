@@ -1,4 +1,5 @@
 import { create } from "zustand"
+import { persist, createJSONStorage } from "zustand/middleware"
 import type { User } from "./types"
 
 export interface WorkspaceScope {
@@ -7,6 +8,7 @@ export interface WorkspaceScope {
   name: string
   status?: "pending" | "processing" | "summarising" | "ready" | "failed"
   doc_type?: "book" | "research_paper"
+  expected_summary_count?: number
 }
 
 interface AppStore {
@@ -20,13 +22,26 @@ interface AppStore {
   setActiveTab: (tab: "chat" | "summarise" | "quiz" | "documents") => void
 }
 
-export const useAuthStore = create<AppStore>((set) => ({
-  user: null,
-  isLoading: true,
-  setUser: (user) => set({ user }),
-  setLoading: (isLoading) => set({ isLoading }),
-  scope: null,
-  setScope: (scope) => set({ scope }),
-  activeTab: "chat",
-  setActiveTab: (activeTab) => set({ activeTab }),
-}))
+export const useAuthStore = create<AppStore>()(
+  persist(
+    (set) => ({
+      user: null,
+      isLoading: true,
+      setUser: (user) => set({ user }),
+      setLoading: (isLoading) => set({ isLoading }),
+      scope: null,
+      setScope: (scope) => set({ scope }),
+      activeTab: "chat",
+      setActiveTab: (activeTab) => set({ activeTab }),
+    }),
+    {
+      name: "studybuddy-workspace",
+      storage: createJSONStorage(() => sessionStorage),
+      // Only persist workspace navigation state, not auth (managed by refresh cookie)
+      partialize: (state) => ({
+        scope: state.scope,
+        activeTab: state.activeTab,
+      }),
+    }
+  )
+)

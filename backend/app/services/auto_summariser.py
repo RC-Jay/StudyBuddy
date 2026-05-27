@@ -109,8 +109,8 @@ async def _extract_toc_llm(
     """
     sample = pages[:_TOC_SCAN_PAGES]
     text = "\n\n---\n\n".join(p.page_content for p in sample)
-    if len(text) > 12000:
-        text = text[:12000]
+    if len(text) > 40000:
+        text = text[:40000]
 
     messages = [
         {"role": "system", "content": _TOC_EXTRACTION_SYSTEM},
@@ -251,6 +251,8 @@ async def summarise_book(
     if chapters:
         logger.info("TOC stage 1 succeeded: %d chapters", len(chapters))
         sections_with_queries = _toc_to_sections(chapters)
+        doc.expected_summary_count = len(sections_with_queries)
+        db.commit()
         for section_hint, query in sections_with_queries:
             if section_hint in skip:
                 logger.debug("Skipping already-done section '%s'", section_hint)
@@ -280,6 +282,8 @@ async def summarise_book(
     regex_sections = _extract_toc_regex(pages)
     if regex_sections:
         logger.info("TOC stage 2 (regex) succeeded: %d sections", len(regex_sections))
+        doc.expected_summary_count = len(regex_sections)
+        db.commit()
         for heading, section_pages in regex_sections:
             if heading in skip:
                 continue
@@ -304,6 +308,8 @@ async def summarise_book(
     # Stage 3: Equal-split fallback
     logger.info("TOC stage 3 (equal split) for document %s", doc.id)
     fallback_sections = _equal_split_fallback(pages)
+    doc.expected_summary_count = len(fallback_sections)
+    db.commit()
     for part_label, part_pages in fallback_sections:
         if part_label in skip:
             continue
@@ -345,6 +351,9 @@ async def summarise_paper(
     """
     skip = done_granularities or set()
     logger.info("Starting paper summarisation for document %s", doc.id)
+
+    doc.expected_summary_count = 2  # FULL + CONCEPTS
+    db.commit()
 
     paper_pages = pages[:_PAPER_MAX_PAGES]
     full_text = "\n\n".join(p.page_content for p in paper_pages)

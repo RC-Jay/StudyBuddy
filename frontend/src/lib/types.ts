@@ -19,6 +19,7 @@ export interface Document {
   processing_status: "pending" | "processing" | "summarising" | "ready" | "failed"
   processing_error: string | null
   doc_type: "book" | "research_paper" | null
+  expected_summary_count: number | null
   created_at: string
 }
 
