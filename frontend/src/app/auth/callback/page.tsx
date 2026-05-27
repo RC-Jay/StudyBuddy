@@ -15,12 +15,11 @@ function CallbackHandler() {
     const code = searchParams.get("code")
     const errorParam = searchParams.get("error")
 
-    if (errorParam) {
-      setError("Sign-in was cancelled or denied.")
-      return
-    }
-    if (!code) {
-      setError("No authorization code received.")
+    if (errorParam || !code) {
+      const msg = errorParam
+        ? "Sign-in was cancelled or denied."
+        : "No authorization code received."
+      Promise.resolve().then(() => setError(msg))
       return
     }
 

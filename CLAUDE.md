@@ -133,13 +133,18 @@ npm run lint     # ESLint
 ### Architecture
 
 **Route groups:**
-- `src/app/(app)/` — authenticated app shell (chat, library, quiz, summaries); protected by the `(app)/layout.tsx` guard
+- `src/app/(app)/library/` — unified workspace (two-column: library sidebar + workspace panel with Chat/Summarise/Quiz tabs); protected by `(app)/layout.tsx` auth guard
+- `src/app/(app)/chat|quiz|summaries/` — redirect to `/library`
 - `src/app/login/` — public login page (Google Sign-In button + LinkedIn button)
 - `src/app/auth/callback/` — OAuth redirect handler; reads `?code=` from LinkedIn and posts to `/auth/linkedin`
-- `src/app/page.tsx` — root redirect
+- `src/app/page.tsx` — root redirect to `/library`
+
+**Unified workspace layout:**
+- Left: `LibrarySidebar` — documents + collections + upload; clicking an item sets `scope` in Zustand
+- Right: tab switcher (Chat / Summarise / Quiz) — reads `scope` from Zustand; tab components are keyed by `scope.id` so they remount cleanly on scope change
 
 **State and auth:**
-- `src/lib/store.ts` — Zustand store; holds `user: User | null` and `isLoading`
+- `src/lib/store.ts` — Zustand store; holds `user`, `isLoading`, `scope: WorkspaceScope | null`, `activeTab`
 - `src/components/auth/AuthProvider.tsx` — on mount calls `refreshSession()` to rehydrate from the httpOnly refresh cookie; wraps the root layout
 - `src/lib/auth.ts` — thin wrappers around the backend auth endpoints; calls `setAccessToken()` on successful login
 - `src/lib/api.ts` — axios instance; attaches `Authorization` header from in-memory `accessToken`; 401 interceptor auto-calls `/auth/refresh` and retries once before redirecting to `/login`

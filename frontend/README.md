@@ -66,24 +66,63 @@ Both flows receive a JWT access token in the response body (stored in memory) an
 
 ---
 
+## Unified Workspace
+
+After logging in, the entire app lives at `/library` — a two-column layout:
+
+```
+┌─────────────────┬──────────────────────────────────────┐
+│  StudyBuddy     │  [Document / Collection title]        │
+│  ─────────────  │  ──────────────────────────────────── │
+│  📄 Documents   │  [ Chat ]  [ Summarise ]  [ Quiz ]    │
+│    Doc 1   ●    │                                        │
+│    Doc 2   ●    │  Tab content fills this area           │
+│    + Upload     │                                        │
+│  ─────────────  │  ────────────────────────────────────  │
+│  📁 Collections │  [ Ask anything about this doc... ] ▶  │
+│    Collection 1 │                                        │
+│    + New        │                                        │
+│  ─────────────  │                                        │
+│  User · Sign out│                                        │
+└─────────────────┴──────────────────────────────────────┘
+```
+
+**Left sidebar** — lists all documents (with upload + delete) and collections (with create + delete). A coloured dot shows each document's processing status. Clicking any item opens it in the right panel.
+
+**Right panel — Chat tab** — conversational Q&A grounded in the selected document or collection, with SSE streaming and citation chips. Chat history for the current scope is accessible via a compact dropdown.
+
+**Right panel — Summarise tab** — generate a Full Summary, TLDR, Key Concepts list, or Section summary. Previously generated summaries for the scope are shown in a slim list.
+
+**Right panel — Quiz tab** — configure format (MCQ / Short Answer / True-False), difficulty, mode (Practice or timed Exam), and question count, then work through questions and see a scored debrief.
+
+Routes `/chat`, `/quiz`, and `/summaries` redirect to `/library`.
+
+---
+
 ## Project Structure
 
 ```
 src/
 ├── app/
-│   ├── (app)/           # Authenticated shell — chat, library, quiz, summaries
-│   │   └── layout.tsx   # Auth guard + sidebar navigation
+│   ├── (app)/
+│   │   ├── layout.tsx        # Auth guard (redirects to /login if not authenticated)
+│   │   └── library/          # Unified workspace — the main app page
 │   ├── auth/
-│   │   └── callback/    # OAuth redirect handler (LinkedIn)
-│   ├── login/           # Public login page (Google + LinkedIn buttons)
-│   └── page.tsx         # Root redirect
+│   │   └── callback/         # OAuth redirect handler (LinkedIn)
+│   ├── login/                # Public login page (Google + LinkedIn buttons)
+│   └── page.tsx              # Root redirect → /library
 ├── components/
-│   └── auth/
-│       └── AuthProvider.tsx  # Rehydrates session from refresh cookie on mount
+│   ├── auth/
+│   │   └── AuthProvider.tsx  # Rehydrates session from refresh cookie on mount
+│   └── workspace/
+│       ├── LibrarySidebar.tsx  # Left panel: documents, collections, upload, user info
+│       ├── ChatTab.tsx         # Chat interface with SSE streaming
+│       ├── SummariseTab.tsx    # Summary generation and history
+│       └── QuizTab.tsx         # Quiz setup → active → debrief flow
 └── lib/
     ├── api.ts           # Axios instance (auth header, 401 retry interceptor)
     ├── auth.ts          # loginWithGoogle, loginWithLinkedIn, initiateLinkedInLogin, logout, refreshSession
-    ├── store.ts         # Zustand store — user + isLoading
+    ├── store.ts         # Zustand store — user, isLoading, scope, activeTab
     └── types.ts         # Shared TypeScript interfaces
 ```
 
