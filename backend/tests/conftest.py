@@ -13,7 +13,7 @@ Override the URL via the TEST_DATABASE_URL environment variable.
 
 External services
 -----------------
-No live calls to Azure OpenAI, ChangePay, or Azure Blob are made.
+No live calls to Azure OpenAI, Google OAuth, or Azure Blob are made.
 All external clients are replaced by lightweight doubles.
 """
 import os
@@ -23,8 +23,7 @@ from collections.abc import AsyncGenerator
 # Set required env vars before any app imports so Pydantic Settings doesn't error
 os.environ.setdefault("DATABASE_URL", "postgresql://localhost/studybuddy_test")
 os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key-not-for-production")
-os.environ.setdefault("CHANGEPAY_BASE_URL", "https://api.test.changepay.in")
-os.environ.setdefault("CHANGEPAY_TPID", "test-tpid")
+os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id.apps.googleusercontent.com")
 os.environ.setdefault("AZURE_OPENAI_API_KEY", "test-key")
 os.environ.setdefault("AZURE_OPENAI_ENDPOINT", "https://test.openai.azure.com/")
 
@@ -139,11 +138,11 @@ def db(db_engine):
 @pytest.fixture
 def test_user(db) -> User:
     user = User(
-        id=uuid.uuid4(),
-        phone="9999999999",
+        oauth_provider="google",
+        oauth_provider_id="google-test-user-id-001",
         email="testuser@example.com",
         display_name="Test User",
-        changepay_profile_token="cp-test-token",
+        picture_url="https://lh3.googleusercontent.com/test",
     )
     db.add(user)
     db.commit()
@@ -155,11 +154,11 @@ def test_user(db) -> User:
 def other_user(db) -> User:
     """A second user — used to verify ownership checks."""
     user = User(
-        id=uuid.uuid4(),
-        phone="8888888888",
+        oauth_provider="google",
+        oauth_provider_id="google-other-user-id-002",
         email="other@example.com",
         display_name="Other User",
-        changepay_profile_token="cp-other-token",
+        picture_url=None,
     )
     db.add(user)
     db.commit()

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.user import RefreshToken, User
-from app.services.changepay import ChangepayUser
+from app.services.oauth.base import OAuthUser
 
 
 def _hash_token(token: str) -> str:
@@ -61,21 +61,24 @@ def revoke_refresh_token(db: Session, raw_token: str) -> None:
         db.commit()
 
 
-def upsert_user(db: Session, cp_user: ChangepayUser) -> User:
-    user_uuid = uuid.UUID(cp_user.user_id)
-    user = db.get(User, user_uuid)
+def upsert_user(db: Session, oauth_user: OAuthUser) -> User:
+    """Create a new user or update an existing one matched by (oauth_provider, oauth_provider_id)."""
+    user = db.query(User).filter_by(
+        oauth_provider=oauth_user.provider,
+        oauth_provider_id=oauth_user.provider_id,
+    ).first()
     if user:
-        user.email = cp_user.email
-        user.display_name = cp_user.display_name
-        user.changepay_profile_token = cp_user.customer_token
+        user.email = oauth_user.email
+        user.display_name = oauth_user.display_name
+        user.picture_url = oauth_user.picture_url
         user.last_seen_at = datetime.now(timezone.utc)
     else:
         user = User(
-            id=user_uuid,
-            phone=cp_user.phone,
-            email=cp_user.email,
-            display_name=cp_user.display_name,
-            changepay_profile_token=cp_user.customer_token,
+            oauth_provider=oauth_user.provider,
+            oauth_provider_id=oauth_user.provider_id,
+            email=oauth_user.email,
+            display_name=oauth_user.display_name,
+            picture_url=oauth_user.picture_url,
         )
         db.add(user)
     db.commit()

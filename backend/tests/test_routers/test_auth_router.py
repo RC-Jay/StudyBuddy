@@ -1,140 +1,181 @@
 """
-Tests for the /auth router.
+Tests for the /auth router (OAuth provider strategy).
 
-External calls to ChangePay are mocked — no live HTTP requests.
-The `client_with_auth` fixture is used where we want to exercise real JWT auth.
+OAuth providers are replaced with MockOAuthProvider via register_oauth_provider()
+— no live network calls are made.
 """
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.changepay import ChangepayError, ChangepayUser
+from app.services.oauth import register_oauth_provider
+from app.services.oauth.base import BaseOAuthProvider, OAuthUser, ProviderNotConfiguredError
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Test doubles
 # ---------------------------------------------------------------------------
 
-def _cp_user(user_id: str | None = None) -> ChangepayUser:
-    return ChangepayUser(
-        user_id=user_id or str(uuid.uuid4()),
-        phone="9000000000",
+class MockOAuthProvider(BaseOAuthProvider):
+    """Controllable stand-in for any OAuth provider."""
+
+    def __init__(self, name: str, response: OAuthUser | Exception):
+        self._name = name
+        self._response = response
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def get_user_info(self, credential: str) -> OAuthUser:
+        if isinstance(self._response, Exception):
+            raise self._response
+        return self._response
+
+
+def _oauth_user(provider: str = "google", provider_id: str | None = None) -> OAuthUser:
+    return OAuthUser(
+        provider=provider,
+        provider_id=provider_id or f"pid-{uuid.uuid4()}",
         email="auth@example.com",
         display_name="Auth User",
-        customer_token="cp-auth-token",
+        picture_url="https://lh3.googleusercontent.com/photo",
     )
 
 
-def _mock_cp_client(cp_user: ChangepayUser) -> MagicMock:
-    client = MagicMock()
-    client.request_otp = AsyncMock(return_value={"token": "123456"})
-    client.login_with_otp = AsyncMock(return_value=cp_user)
-    client.login_with_password = AsyncMock(return_value=cp_user)
-    return client
-
-
 # ---------------------------------------------------------------------------
-# OTP request
+# POST /auth/{provider}
 # ---------------------------------------------------------------------------
 
-class TestRequestOtp:
-    def test_returns_200_and_debug_token(self, client):
-        mock_client = _mock_cp_client(_cp_user())
-        with patch("app.routers.auth.get_changepay_client", return_value=mock_client):
-            resp = client.post("/api/v1/auth/otp/request", json={"phone": "9000000000"})
-        assert resp.status_code == 200
-        assert resp.json()["message"] == "OTP sent"
-
-    def test_changepay_error_propagates(self, client):
-        mock_client = MagicMock()
-        mock_client.request_otp = AsyncMock(
-            side_effect=ChangepayError("Phone not found", status_code=404)
-        )
-        with patch("app.routers.auth.get_changepay_client", return_value=mock_client):
-            resp = client.post("/api/v1/auth/otp/request", json={"phone": "0000000000"})
-        assert resp.status_code == 404
-
-
-# ---------------------------------------------------------------------------
-# OTP login
-# ---------------------------------------------------------------------------
-
-class TestLoginOtp:
-    def test_successful_login_returns_access_token(self, client, db):
-        """login/otp must return an access_token and set the refresh cookie."""
-        cp_user = _cp_user()
-        mock_client = _mock_cp_client(cp_user)
-
-        with patch("app.routers.auth.get_changepay_client", return_value=mock_client):
-            resp = client.post(
-                "/api/v1/auth/login/otp",
-                json={"phone": "9000000000", "otp": "123456"},
-            )
+class TestLoginWithOAuth:
+    def test_valid_google_credential_returns_access_token(self, client):
+        ou = _oauth_user()
+        mock = MockOAuthProvider("google", ou)
+        orig = register_oauth_provider.__module__
+        from app.services.oauth import _REGISTRY
+        original_google = _REGISTRY.get("google")
+        register_oauth_provider(mock)
+        try:
+            resp = client.post("/api/v1/auth/google", json={"credential": "valid-id-token"})
+        finally:
+            if original_google:
+                register_oauth_provider(original_google)
 
         assert resp.status_code == 200
         data = resp.json()
         assert "access_token" in data
-        assert data["user"]["phone"] == "9000000000"
+        assert data["token_type"] == "bearer"
+        assert data["user"]["email"] == "auth@example.com"
+        assert data["user"]["display_name"] == "Auth User"
         assert "sb_refresh" in resp.cookies
 
-    def test_bad_otp_returns_changepay_error(self, client):
-        mock_client = MagicMock()
-        mock_client.login_with_otp = AsyncMock(
-            side_effect=ChangepayError("Invalid OTP", status_code=401)
-        )
-        with patch("app.routers.auth.get_changepay_client", return_value=mock_client):
-            resp = client.post(
-                "/api/v1/auth/login/otp",
-                json={"phone": "9000000000", "otp": "wrong"},
-            )
+    def test_invalid_credential_returns_401(self, client):
+        mock = MockOAuthProvider("google", ValueError("Invalid Google ID token"))
+        from app.services.oauth import _REGISTRY
+        original_google = _REGISTRY.get("google")
+        register_oauth_provider(mock)
+        try:
+            resp = client.post("/api/v1/auth/google", json={"credential": "bad-token"})
+        finally:
+            if original_google:
+                register_oauth_provider(original_google)
+
         assert resp.status_code == 401
+        assert "Invalid Google ID token" in resp.json()["detail"]
 
+    def test_missing_credential_returns_422(self, client):
+        resp = client.post("/api/v1/auth/google", json={})
+        assert resp.status_code == 422
 
-# ---------------------------------------------------------------------------
-# Password login
-# ---------------------------------------------------------------------------
+    def test_unknown_provider_returns_404(self, client):
+        resp = client.post("/api/v1/auth/nonexistent", json={"credential": "tok"})
+        assert resp.status_code == 404
 
-class TestLoginPassword:
-    def test_successful_login(self, client):
-        cp_user = _cp_user()
-        mock_client = _mock_cp_client(cp_user)
+    def test_unconfigured_provider_returns_500(self, client):
+        mock = MockOAuthProvider("google", ProviderNotConfiguredError("LinkedIn OAuth is not configured"))
+        from app.services.oauth import _REGISTRY
+        original_google = _REGISTRY.get("google")
+        register_oauth_provider(mock)
+        try:
+            resp = client.post("/api/v1/auth/google", json={"credential": "tok"})
+        finally:
+            if original_google:
+                register_oauth_provider(original_google)
 
-        with patch("app.routers.auth.get_changepay_client", return_value=mock_client):
-            resp = client.post(
-                "/api/v1/auth/login/password",
-                json={"phone": "9000000000", "password": "secret"},
-            )
+        assert resp.status_code == 500
+
+    def test_second_login_with_same_provider_id_returns_same_user(self, client):
+        """Logging in twice with the same provider account must not create two users."""
+        ou = _oauth_user(provider_id="stable-pid")
+        mock = MockOAuthProvider("google", ou)
+        from app.services.oauth import _REGISTRY
+        original_google = _REGISTRY.get("google")
+        register_oauth_provider(mock)
+        try:
+            r1 = client.post("/api/v1/auth/google", json={"credential": "token-1"})
+            r2 = client.post("/api/v1/auth/google", json={"credential": "token-2"})
+        finally:
+            if original_google:
+                register_oauth_provider(original_google)
+
+        assert r1.json()["user"]["id"] == r2.json()["user"]["id"]
+
+    def test_response_contains_picture_url(self, client):
+        ou = _oauth_user()
+        mock = MockOAuthProvider("google", ou)
+        from app.services.oauth import _REGISTRY
+        original_google = _REGISTRY.get("google")
+        register_oauth_provider(mock)
+        try:
+            resp = client.post("/api/v1/auth/google", json={"credential": "tok"})
+        finally:
+            if original_google:
+                register_oauth_provider(original_google)
+
+        assert resp.json()["user"]["picture_url"] == "https://lh3.googleusercontent.com/photo"
+
+    def test_linkedin_provider_works_via_same_endpoint(self, client):
+        ou = _oauth_user(provider="linkedin")
+        mock = MockOAuthProvider("linkedin", ou)
+        from app.services.oauth import _REGISTRY
+        original_linkedin = _REGISTRY.get("linkedin")
+        register_oauth_provider(mock)
+        try:
+            resp = client.post("/api/v1/auth/linkedin", json={"credential": "auth-code-from-linkedin"})
+        finally:
+            if original_linkedin:
+                register_oauth_provider(original_linkedin)
 
         assert resp.status_code == 200
-        assert "access_token" in resp.json()
+        assert resp.json()["user"]["email"] == "auth@example.com"
 
 
 # ---------------------------------------------------------------------------
-# Token refresh
+# POST /auth/refresh
 # ---------------------------------------------------------------------------
 
 class TestRefreshToken:
     def test_refresh_with_valid_cookie_returns_new_token(self, client_with_auth, db, test_user):
-        """Create a refresh token directly and pass it as a cookie."""
         from app.services.auth import create_refresh_token
         c, _ = client_with_auth
         raw_token = create_refresh_token(db, test_user.id)
 
-        refresh_resp = c.post(
-            "/api/v1/auth/refresh",
-            cookies={"sb_refresh": raw_token},
-        )
-        assert refresh_resp.status_code == 200
-        assert "access_token" in refresh_resp.json()
+        resp = c.post("/api/v1/auth/refresh", cookies={"sb_refresh": raw_token})
+        assert resp.status_code == 200
+        assert "access_token" in resp.json()
 
     def test_refresh_without_cookie_returns_401(self, client):
         resp = client.post("/api/v1/auth/refresh")
         assert resp.status_code == 401
 
+    def test_refresh_with_invalid_token_returns_401(self, client_with_auth):
+        c, _ = client_with_auth
+        resp = c.post("/api/v1/auth/refresh", cookies={"sb_refresh": "not-a-real-token"})
+        assert resp.status_code == 401
+
 
 # ---------------------------------------------------------------------------
-# Logout
+# POST /auth/logout
 # ---------------------------------------------------------------------------
 
 class TestLogout:
@@ -142,13 +183,15 @@ class TestLogout:
         resp = client.post("/api/v1/auth/logout")
         assert resp.status_code == 204
 
-    def test_logout_clears_cookie(self, client_with_auth, db, test_user):
-        from app.services.auth import create_refresh_token
+    def test_logout_revokes_refresh_token(self, client_with_auth, db, test_user):
+        from app.services.auth import create_refresh_token, rotate_refresh_token
         c, _ = client_with_auth
         raw_token = create_refresh_token(db, test_user.id)
 
-        logout_resp = c.post("/api/v1/auth/logout", cookies={"sb_refresh": raw_token})
-        assert logout_resp.status_code == 204
+        c.post("/api/v1/auth/logout", cookies={"sb_refresh": raw_token})
+
+        with pytest.raises(ValueError, match="Invalid or expired"):
+            rotate_refresh_token(db, raw_token)
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +200,6 @@ class TestLogout:
 
 class TestAuthMiddleware:
     def test_missing_token_returns_401(self, client_with_auth):
-        """Without auth headers, protected endpoints must return 401."""
         c, _ = client_with_auth
         resp = c.get("/api/v1/documents")
         assert resp.status_code == 401

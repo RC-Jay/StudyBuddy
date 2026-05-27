@@ -13,9 +13,13 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
 
-    # ChangePay
-    changepay_base_url: str
-    changepay_tpid: str
+    # Google OAuth
+    google_client_id: str
+
+    # LinkedIn OAuth (optional — required only when LinkedIn login is used)
+    linkedin_client_id: str | None = None
+    linkedin_client_secret: str | None = None
+    linkedin_redirect_uri: str | None = None
 
     # LLM provider — selects which chat backend get_chat_provider() returns.
     # Supported: azure_openai

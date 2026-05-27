@@ -2,8 +2,6 @@
 
 An AI-powered study assistant for college students. Upload your textbooks, research papers, and lecture notes — then interact with them through an intelligent agent that helps you understand, retain, and test your knowledge.
 
-StudyBuddy is a companion application to [ChangePay](https://changepay.in), a college eCommerce platform. Users log in with their existing ChangePay credentials — no separate registration required.
-
 ---
 
 ## What it does
@@ -38,7 +36,7 @@ The project is a monorepo with two packages:
 
 **RAG pipeline** — Uploaded documents are extracted, split into overlapping chunks, and embedded. At query time the most relevant chunks are retrieved from pgvector using cosine similarity and injected as source context into the LLM prompt.
 
-**Auth** — StudyBuddy has no user database of its own. Login calls the ChangePay credential APIs (password or OTP). On success, StudyBuddy issues its own short-lived JWT (15 min) and a rolling refresh token (7 days) stored in an httpOnly cookie.
+**Auth** — Users sign in with Google or LinkedIn via OAuth. On success, StudyBuddy issues its own short-lived JWT (15 min) and a rolling refresh token (7 days) stored in an httpOnly cookie. OAuth providers are implemented as a Strategy Pattern — adding a new provider is a single subclass with no changes to the router or auth service.
 
 ---
 
@@ -49,6 +47,7 @@ StudyBuddy/
 ├── backend/      # FastAPI API server
 │   └── README.md # Backend setup, API reference, environment variables
 └── frontend/     # Next.js web app
+    └── README.md # Frontend setup and environment variables
 ```
 
 See the [backend README](./backend/README.md) for full setup instructions, API documentation, and environment variable reference.

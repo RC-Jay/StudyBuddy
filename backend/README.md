@@ -1,6 +1,6 @@
 # StudyBuddy — Backend
 
-FastAPI backend for StudyBuddy, an AI-powered study assistant for college students. Handles authentication (via ChangePay), document ingestion, retrieval-augmented generation (RAG), chat, quiz generation, and summarisation.
+FastAPI backend for StudyBuddy, an AI-powered study assistant for college students. Handles authentication (Google and LinkedIn OAuth), document ingestion, retrieval-augmented generation (RAG), chat, quiz generation, and summarisation.
 
 ---
 
@@ -18,7 +18,7 @@ FastAPI backend for StudyBuddy, an AI-powered study assistant for college studen
 | Document ingestion | LangChain (pymupdf4llm for PDF, Docx2txtLoader for DOCX) |
 | Vector store | LangChain PGVector — langchain-postgres (swappable) |
 | File storage | Local filesystem (dev) — swap to Azure Blob via env var |
-| Auth | ChangePay credential APIs + StudyBuddy-issued JWT sessions |
+| Auth | Google / LinkedIn OAuth → StudyBuddy-issued JWT sessions |
 | Package manager | uv |
 
 ---
@@ -28,6 +28,7 @@ FastAPI backend for StudyBuddy, an AI-powered study assistant for college studen
 - Python 3.14
 - PostgreSQL 18 with the `pgvector` extension installed
 - `uv` — install via `brew install uv` or `pip install uv`
+- A Google OAuth 2.0 Client ID (see setup below)
 - An Azure OpenAI resource with two deployments:
   - `gpt-4o-mini` for chat and quiz evaluation
   - `text-embedding-3-large` for document embeddings
@@ -51,7 +52,7 @@ backend/
 │   │   ├── quiz.py          # Question, QuestionFeedback, QuizSession
 │   │   └── summary.py       # Summary
 │   ├── schemas/             # Pydantic request/response models (one file per domain)
-│   │   ├── auth.py          # TokenResponse, OtpLoginBody…
+│   │   ├── auth.py          # OAuthLoginBody, TokenResponse
 │   │   ├── document.py      # DocumentOut, DocumentStatusOut
 │   │   ├── collection.py    # CollectionIn, CollectionOut
 │   │   ├── chat.py          # SessionCreate, SessionOut, MessageIn, MessageOut
@@ -71,18 +72,21 @@ backend/
 │   │   ├── quiz.py
 │   │   └── summaries.py
 │   ├── services/            # Business logic layer
+│   │   ├── oauth/                 # OAuth provider abstraction (Strategy Pattern)
+│   │   │   ├── base.py            #   OAuthUser, ProviderNotConfiguredError, BaseOAuthProvider
+│   │   │   ├── google.py          #   GoogleOAuthProvider
+│   │   │   ├── linkedin.py        #   LinkedInOAuthProvider
+│   │   │   └── __init__.py        #   Registry: get_oauth_provider(), register_oauth_provider()
 │   │   ├── llm/                   # Chat provider abstraction (Strategy Pattern)
 │   │   │   ├── base.py            #   BaseChatProvider — abstract interface
 │   │   │   └── azure_openai.py    #   AzureOpenAIChatProvider — concrete impl
-│   │   ├── changepay.py     # ChangePay auth API client + get_changepay_client() singleton
-│   │   ├── auth.py          # JWT + refresh token management
-│   │   ├── azure_openai.py  # Compat shim — delegates to llm/
+│   │   ├── auth.py                # JWT + refresh token management, upsert_user
 │   │   ├── document_loader.py     # Strategy pattern: file-type loaders (PDF, DOCX, extensible)
 │   │   ├── document_processor.py  # Ingestion pipeline — file-type-agnostic orchestrator
 │   │   ├── langchain_setup.py     # Embeddings + vector store singletons (LangChain base types)
-│   │   ├── rag.py           # pgvector retrieval, context + citation building
-│   │   ├── quiz_engine.py   # Question bank, generation, short-answer eval
-│   │   └── storage.py       # File storage — Strategy Pattern (Local, Azure Blob, extensible)
+│   │   ├── rag.py                 # pgvector retrieval, context + citation building
+│   │   ├── quiz_engine.py         # Question bank, generation, short-answer eval
+│   │   └── storage.py             # File storage — Strategy Pattern (Local, Azure Blob, extensible)
 │   └── middleware/
 │       └── auth.py          # get_current_user FastAPI dependency
 ├── alembic/                 # Migration scripts
@@ -95,17 +99,16 @@ backend/
 
 ## Provider Architecture
 
-Three concerns are deliberately kept behind stable interfaces so any implementation can be swapped without touching callers:
+Four concerns are deliberately kept behind stable interfaces so any implementation can be swapped without touching callers:
 
-| Concern | Interface | Current impl | How to swap |
+| Concern | Interface | Current impl | How to add a new one |
 |---|---|---|---|
-| **Chat LLM** | `BaseChatProvider` (`services/llm/base.py`) | `AzureOpenAIChatProvider` | Subclass `BaseChatProvider`, add an `elif` in `services/llm/__init__.py`, set `LLM_PROVIDER=<key>` |
-| **Embeddings** | LangChain `Embeddings` | `AzureOpenAIEmbeddings` | Replace the return value in `langchain_setup.get_embeddings()` |
-| **Vector store** | LangChain `VectorStore` | `PGVector` (PostgreSQL) | Replace the return value in `langchain_setup.get_vectorstore()` |
-| **File storage** | `BaseStorageBackend` (`services/storage.py`) | Local filesystem / Azure Blob | Subclass `BaseStorageBackend`, add `elif` in `get_storage_backend()`, set `STORAGE_BACKEND=<key>` |
+| **OAuth** | `BaseOAuthProvider` (`services/oauth/base.py`) | Google, LinkedIn | Subclass `BaseOAuthProvider`, call `register_oauth_provider(MyProvider())` |
+| **Chat LLM** | `BaseChatProvider` (`services/llm/base.py`) | `AzureOpenAIChatProvider` | Subclass `BaseChatProvider`, add `elif` in `services/llm/__init__.py`, set `LLM_PROVIDER=<key>` |
+| **File storage** | `BaseStorageBackend` (`services/storage.py`) | Local / Azure Blob | Subclass `BaseStorageBackend`, add `elif` in `get_storage_backend()`, set `STORAGE_BACKEND=<key>` |
 | **Document loaders** | `BaseDocumentLoader` (`services/document_loader.py`) | PDF, DOCX | `register_loader("ext", MyLoader())` |
-
-All providers are **process-level singletons** — `get_chat_provider()`, `get_embeddings()`, and `get_vectorstore()` each cache their instance on first call.
+| **Embeddings** | LangChain `Embeddings` | `AzureOpenAIEmbeddings` | Replace return value in `langchain_setup.get_embeddings()` |
+| **Vector store** | LangChain `VectorStore` | `PGVector` | Replace return value in `langchain_setup.get_vectorstore()` |
 
 ---
 
@@ -134,18 +137,20 @@ Edit `.env` with your values:
 
 ```env
 DATABASE_URL=postgresql://localhost/studybuddy
-
 JWT_SECRET_KEY=<a long random string>
 
-CHANGEPAY_BASE_URL=https://api.test.changepay.in
-CHANGEPAY_TPID=<your third-party ID>
+# Google OAuth — https://console.cloud.google.com → Credentials → OAuth 2.0 Client IDs
+GOOGLE_CLIENT_ID=<your-client-id>.apps.googleusercontent.com
+
+# LinkedIn OAuth (optional — leave blank to disable LinkedIn login)
+LINKEDIN_CLIENT_ID=
+LINKEDIN_CLIENT_SECRET=
+LINKEDIN_REDIRECT_URI=http://localhost:3000/auth/callback
 
 AZURE_OPENAI_API_KEY=<your key>
 AZURE_OPENAI_ENDPOINT=https://<your-resource>.cognitiveservices.azure.com/
 AZURE_OPENAI_CHAT_DEPLOYMENT=gpt-4o-mini
 AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-large
-AZURE_OPENAI_API_VERSION=2025-01-01-preview
-AZURE_OPENAI_EMBEDDING_API_VERSION=2023-05-15
 
 STORAGE_BACKEND=local
 LOCAL_STORAGE_PATH=./uploads
@@ -185,19 +190,24 @@ All routes are prefixed with `/api/v1`. Protected routes require an `Authorizati
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/auth/otp/request?phone=` | No | Trigger an OTP SMS via ChangePay. In staging, the OTP is returned in the response body. |
-| `POST` | `/auth/login/otp` | No | Submit phone + OTP. Returns access token + sets refresh cookie. |
-| `POST` | `/auth/login/password` | No | Submit phone + password. Returns access token + sets refresh cookie. |
+| `POST` | `/auth/{provider}` | No | Exchange an OAuth credential for a StudyBuddy access token. `provider` is `google` or `linkedin`. |
 | `POST` | `/auth/refresh` | Cookie | Rotate the refresh token and issue a new access token. |
 | `POST` | `/auth/logout` | Cookie | Revoke the refresh token. |
 
 **Login flow:**
-1. Call `/auth/otp/request` or go straight to `/auth/login/password`
-2. On success, you receive a short-lived **access token** (15 min) in the response body and a **refresh token** in an httpOnly cookie (7-day rolling)
-3. Use the access token in the `Authorization` header for all protected requests
-4. When the access token expires, call `/auth/refresh` — the cookie is sent automatically
+1. **Google** — frontend obtains an ID token from the `GoogleLogin` component, posts `{"credential": "<id_token>"}` to `/auth/google`
+2. **LinkedIn** — frontend redirects to LinkedIn's auth URL, LinkedIn redirects back to `/auth/callback?code=...`, the callback page posts `{"credential": "<code>"}` to `/auth/linkedin`
+3. On success, you receive a short-lived **access token** (15 min) in the response body and a **refresh token** in an httpOnly cookie (7-day rolling)
+4. Use the access token in the `Authorization` header for all protected requests
+5. When the access token expires, call `/auth/refresh` — the cookie is sent automatically
 
-**User eligibility:** ChangePay accounts must have a `CUSTOMER` profile. Accounts without one are rejected at login.
+**Error codes:**
+- `404` — unknown provider name
+- `401` — credential is invalid, expired, or rejected by the provider
+- `500` — provider is not configured on the server (missing env vars)
+
+**Adding a new OAuth provider:**  
+Create a class in `services/oauth/` that subclasses `BaseOAuthProvider` and implements `name` + `get_user_info(credential)`. Register it via `register_oauth_provider(MyProvider())`. No other files need changing.
 
 ---
 
@@ -368,11 +378,13 @@ To roll back the last migration:
 | `JWT_ALGORITHM` | No | `HS256` | JWT signing algorithm |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | No | `15` | Access token lifetime |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | No | `7` | Refresh token lifetime (rolling) |
+| `GOOGLE_CLIENT_ID` | Yes | — | Google OAuth 2.0 client ID — create at console.cloud.google.com |
+| `LINKEDIN_CLIENT_ID` | No | — | LinkedIn OAuth client ID — leave blank to disable LinkedIn login |
+| `LINKEDIN_CLIENT_SECRET` | No | — | LinkedIn OAuth client secret |
+| `LINKEDIN_REDIRECT_URI` | No | — | Must match the redirect URI registered in the LinkedIn app (e.g. `http://localhost:3000/auth/callback`) |
 | `LLM_PROVIDER` | No | `azure_openai` | Chat backend. Add a new `BaseChatProvider` subclass in `services/llm/` and register it in `services/llm/__init__.py` |
 | `CORS_ORIGINS` | No | `http://localhost:3000` | Comma-separated list of allowed CORS origins |
-| `CHANGEPAY_BASE_URL` | Yes | — | `https://api.test.changepay.in` (staging) or `https://api.changepay.in` (prod) |
-| `CHANGEPAY_TPID` | Yes | — | Third-party ID issued by ChangePay |
-| `AZURE_OPENAI_API_KEY` | Yes | — | Azure OpenAI API key |
+| `AZURE_OPENAI_API_KEY` | Yes | — | Azure OpenAI API key — keep in `.env` only, never commit |
 | `AZURE_OPENAI_ENDPOINT` | Yes | — | Azure OpenAI resource endpoint |
 | `AZURE_OPENAI_CHAT_DEPLOYMENT` | No | `gpt-4o-mini` | Chat model deployment name |
 | `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | No | `text-embedding-3-large` | Embedding model deployment name |

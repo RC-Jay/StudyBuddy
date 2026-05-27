@@ -2,201 +2,74 @@
 
 import { useState } from "react"
 import { useRouter } from "next/navigation"
-import { useForm } from "react-hook-form"
-import { z } from "zod"
-import { zodResolver } from "@hookform/resolvers/zod"
-import { requestOtp, loginWithOtp, loginWithPassword } from "@/lib/auth"
+import { GoogleLogin } from "@react-oauth/google"
+import { initiateLinkedInLogin, loginWithGoogle } from "@/lib/auth"
 import { useAuthStore } from "@/lib/store"
-
-const passwordSchema = z.object({ phone: z.string().min(10), password: z.string().min(1) })
-const otpRequestSchema = z.object({ phone: z.string().min(10) })
-const otpSubmitSchema = z.object({ otp: z.string().length(6) })
-
-type PasswordFields = z.infer<typeof passwordSchema>
-type OtpRequestFields = z.infer<typeof otpRequestSchema>
-type OtpSubmitFields = z.infer<typeof otpSubmitSchema>
 
 export default function LoginPage() {
   const router = useRouter()
   const setUser = useAuthStore((s) => s.setUser)
-  const [mode, setMode] = useState<"password" | "otp-request" | "otp-submit">("password")
-  const [phone, setPhone] = useState("")
-  const [debugOtp, setDebugOtp] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-
-  const pwForm = useForm<PasswordFields>({ resolver: zodResolver(passwordSchema) })
-  const otpReqForm = useForm<OtpRequestFields>({ resolver: zodResolver(otpRequestSchema) })
-  const otpSubmitForm = useForm<OtpSubmitFields>({ resolver: zodResolver(otpSubmitSchema) })
-
-  async function handlePasswordLogin(data: PasswordFields) {
-    setError(null)
-    setLoading(true)
-    try {
-      const user = await loginWithPassword(data.phone, data.password)
-      setUser(user)
-      router.replace("/library")
-    } catch (e: unknown) {
-      const msg = (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
-      setError(msg || "Login failed. Check your credentials.")
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function handleOtpRequest(data: OtpRequestFields) {
-    setError(null)
-    setLoading(true)
-    try {
-      const res = await requestOtp(data.phone)
-      setPhone(data.phone)
-      setDebugOtp(res.debug_token ?? null)
-      setMode("otp-submit")
-      if (res.debug_token) {
-        otpSubmitForm.setValue("otp", res.debug_token)
-      }
-    } catch (e: unknown) {
-      const msg = (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
-      setError(msg || "Failed to send OTP.")
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function handleOtpSubmit(data: OtpSubmitFields) {
-    setError(null)
-    setLoading(true)
-    try {
-      const user = await loginWithOtp(phone, data.otp)
-      setUser(user)
-      router.replace("/library")
-    } catch (e: unknown) {
-      const msg = (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
-      setError(msg || "Invalid OTP. Please try again.")
-    } finally {
-      setLoading(false)
-    }
-  }
 
   return (
     <div className="flex min-h-full items-center justify-center px-4">
       <div className="w-full max-w-md space-y-8">
         <div className="text-center">
           <h1 className="text-3xl font-bold text-indigo-600">StudyBuddy</h1>
-          <p className="mt-2 text-sm text-gray-600">Sign in with your ChangePay account</p>
+          <p className="mt-2 text-sm text-gray-600">AI-powered study assistant</p>
         </div>
 
         <div className="rounded-2xl bg-white p-8 shadow-sm ring-1 ring-gray-200">
-          {/* Tab switcher */}
-          {mode !== "otp-submit" && (
-            <div className="mb-6 flex rounded-lg bg-gray-100 p-1">
-              <button
-                onClick={() => setMode("password")}
-                className={`flex-1 rounded-md py-1.5 text-sm font-medium transition-colors ${mode === "password" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
-              >
-                Password
-              </button>
-              <button
-                onClick={() => setMode("otp-request")}
-                className={`flex-1 rounded-md py-1.5 text-sm font-medium transition-colors ${mode === "otp-request" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
-              >
-                OTP
-              </button>
-            </div>
-          )}
-
           {error && (
-            <div className="mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+            <div className="mb-6 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
           )}
 
-          {mode === "password" && (
-            <form onSubmit={pwForm.handleSubmit(handlePasswordLogin)} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Phone number</label>
-                <input
-                  {...pwForm.register("phone")}
-                  placeholder="+917829860000"
-                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Password</label>
-                <input
-                  {...pwForm.register("password")}
-                  type="password"
-                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-              >
-                {loading ? "Signing in…" : "Sign in"}
-              </button>
-            </form>
-          )}
+          <div className="flex flex-col items-center gap-3">
+            <GoogleLogin
+              onSuccess={async (credentialResponse) => {
+                setError(null)
+                const idToken = credentialResponse.credential
+                if (!idToken) {
+                  setError("No credential received from Google.")
+                  return
+                }
+                try {
+                  const user = await loginWithGoogle(idToken)
+                  setUser(user)
+                  router.replace("/library")
+                } catch (e: unknown) {
+                  const msg = (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+                  setError(msg || "Sign-in failed. Please try again.")
+                }
+              }}
+              onError={() => setError("Google sign-in was cancelled or failed.")}
+              useOneTap
+            />
 
-          {mode === "otp-request" && (
-            <form onSubmit={otpReqForm.handleSubmit(handleOtpRequest)} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Phone number</label>
-                <input
-                  {...otpReqForm.register("phone")}
-                  placeholder="+917829860000"
-                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-              >
-                {loading ? "Sending OTP…" : "Send OTP"}
-              </button>
-            </form>
-          )}
+            <div className="flex w-full items-center gap-3">
+              <div className="h-px flex-1 bg-gray-200" />
+              <span className="text-xs text-gray-400">or</span>
+              <div className="h-px flex-1 bg-gray-200" />
+            </div>
 
-          {mode === "otp-submit" && (
-            <form onSubmit={otpSubmitForm.handleSubmit(handleOtpSubmit)} className="space-y-4">
-              <p className="text-sm text-gray-600">
-                OTP sent to <span className="font-medium">{phone}</span>
-              </p>
-              {debugOtp && (
-                <div className="rounded-lg bg-yellow-50 px-3 py-2 text-xs text-yellow-800">
-                  Staging OTP: <span className="font-mono font-bold">{debugOtp}</span> (pre-filled)
-                </div>
-              )}
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Enter OTP</label>
-                <input
-                  {...otpSubmitForm.register("otp")}
-                  placeholder="123456"
-                  maxLength={6}
-                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-center font-mono text-lg tracking-widest focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-              >
-                {loading ? "Verifying…" : "Verify OTP"}
-              </button>
-              <button type="button" onClick={() => setMode("otp-request")} className="w-full text-sm text-indigo-600 hover:underline">
-                ← Back
-              </button>
-            </form>
-          )}
-
-          <p className="mt-6 text-center text-xs text-gray-500">
-            Don&apos;t have an account?{" "}
-            <a href="https://changepay.in" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">
-              Register on ChangePay
-            </a>
-          </p>
+            <button
+              onClick={() => { setError(null); initiateLinkedInLogin() }}
+              className="flex w-full items-center justify-center gap-3 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
+            >
+              <LinkedInIcon />
+              Continue with LinkedIn
+            </button>
+          </div>
         </div>
       </div>
     </div>
+  )
+}
+
+function LinkedInIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" fill="#0A66C2">
+      <path d="M15.75 0H2.25A2.25 2.25 0 0 0 0 2.25v13.5A2.25 2.25 0 0 0 2.25 18h13.5A2.25 2.25 0 0 0 18 15.75V2.25A2.25 2.25 0 0 0 15.75 0ZM5.625 14.625H3.375V6.75h2.25v7.875ZM4.5 5.85a1.35 1.35 0 1 1 0-2.7 1.35 1.35 0 0 1 0 2.7Zm10.125 8.775h-2.25v-3.713c0-.994-.378-1.587-1.181-1.587-.794 0-1.257.536-1.257 1.587v3.713H7.688V6.75h2.25v1.014c.463-.684 1.194-1.264 2.194-1.264 1.69 0 2.493 1.12 2.493 3.07v5.055Z" />
+    </svg>
   )
 }

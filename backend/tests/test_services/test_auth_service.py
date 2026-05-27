@@ -6,11 +6,10 @@ Covers:
   - Refresh token creation, rotation, and revocation
   - upsert_user (create + update paths)
 
-No live network calls are made — the DB fixture from conftest is used for
-refresh token tests, and JWT is handled locally with the test secret key.
+No live network calls are made.
+OAuth provider tests live in test_oauth_providers.py.
 """
 import uuid
-from datetime import datetime, timedelta, timezone
 
 import pytest
 from jose import JWTError
@@ -23,7 +22,7 @@ from app.services.auth import (
     rotate_refresh_token,
     upsert_user,
 )
-from app.services.changepay import ChangepayUser
+from app.services.oauth.base import OAuthUser
 
 
 # ---------------------------------------------------------------------------
@@ -60,12 +59,11 @@ class TestDecodeAccessToken:
 
 
 # ---------------------------------------------------------------------------
-# Refresh token lifecycle (requires real DB)
+# Refresh token lifecycle
 # ---------------------------------------------------------------------------
 
 class TestRefreshTokenLifecycle:
     def test_create_and_rotate(self, db):
-        """Create a refresh token, then rotate it — should get a new token back."""
         user = _make_user(db)
         raw = create_refresh_token(db, user.id)
         assert isinstance(raw, str) and len(raw) > 20
@@ -75,10 +73,9 @@ class TestRefreshTokenLifecycle:
         assert returned_user_id == user.id
 
     def test_rotate_used_token_raises(self, db):
-        """Rotating an already-used token must raise ValueError."""
         user = _make_user(db)
         raw = create_refresh_token(db, user.id)
-        rotate_refresh_token(db, raw)  # first rotation consumes the token
+        rotate_refresh_token(db, raw)
 
         with pytest.raises(ValueError, match="Invalid or expired"):
             rotate_refresh_token(db, raw)
@@ -92,8 +89,7 @@ class TestRefreshTokenLifecycle:
             rotate_refresh_token(db, raw)
 
     def test_revoke_nonexistent_is_silent(self, db):
-        """Revoking a token that doesn't exist should not raise."""
-        revoke_refresh_token(db, "totally-fake-token")  # no exception
+        revoke_refresh_token(db, "totally-fake-token")
 
 
 # ---------------------------------------------------------------------------
@@ -102,31 +98,41 @@ class TestRefreshTokenLifecycle:
 
 class TestUpsertUser:
     def test_creates_new_user(self, db):
-        cp_user = _make_cp_user()
-        user = upsert_user(db, cp_user)
-        assert user.phone == cp_user.phone
-        assert user.email == cp_user.email
-        assert user.display_name == cp_user.display_name
-        assert user.changepay_profile_token == cp_user.customer_token
+        ou = _make_oauth_user()
+        user = upsert_user(db, ou)
+        assert user.oauth_provider == ou.provider
+        assert user.oauth_provider_id == ou.provider_id
+        assert user.email == ou.email
+        assert user.display_name == ou.display_name
+        assert user.picture_url == ou.picture_url
+        assert user.id is not None
 
     def test_updates_existing_user(self, db):
-        cp_user = _make_cp_user()
-        user1 = upsert_user(db, cp_user)
+        ou = _make_oauth_user()
+        user1 = upsert_user(db, ou)
 
-        # Same user_id, updated email and display_name
-        cp_updated = ChangepayUser(
-            user_id=cp_user.user_id,
-            phone=cp_user.phone,
-            email="updated@example.com",
+        updated = OAuthUser(
+            provider=ou.provider,
+            provider_id=ou.provider_id,
+            email="new@example.com",
             display_name="Updated Name",
-            customer_token="new-cp-token",
+            picture_url="https://new-pic.example.com",
         )
-        user2 = upsert_user(db, cp_updated)
+        user2 = upsert_user(db, updated)
 
         assert user2.id == user1.id
-        assert user2.email == "updated@example.com"
+        assert user2.email == "new@example.com"
         assert user2.display_name == "Updated Name"
-        assert user2.changepay_profile_token == "new-cp-token"
+
+    def test_different_provider_ids_create_different_users(self, db):
+        u1 = upsert_user(db, _make_oauth_user(provider_id="pid-111", email="a@a.com"))
+        u2 = upsert_user(db, _make_oauth_user(provider_id="pid-222", email="b@b.com"))
+        assert u1.id != u2.id
+
+    def test_same_provider_id_different_provider_creates_different_users(self, db):
+        u1 = upsert_user(db, _make_oauth_user(provider="google", provider_id="shared-pid", email="g@example.com"))
+        u2 = upsert_user(db, _make_oauth_user(provider="linkedin", provider_id="shared-pid", email="l@example.com"))
+        assert u1.id != u2.id
 
 
 # ---------------------------------------------------------------------------
@@ -134,14 +140,12 @@ class TestUpsertUser:
 # ---------------------------------------------------------------------------
 
 def _make_user(db):
-    """Insert a minimal User row and return it."""
     from app.models.user import User
     user = User(
-        id=uuid.uuid4(),
-        phone="7777777777",
-        email="refresh@example.com",
+        oauth_provider="google",
+        oauth_provider_id=f"google-refresh-test-{uuid.uuid4()}",
+        email=f"refresh-{uuid.uuid4()}@example.com",
         display_name="Refresh Test",
-        changepay_profile_token="cp-refresh",
     )
     db.add(user)
     db.commit()
@@ -149,11 +153,15 @@ def _make_user(db):
     return user
 
 
-def _make_cp_user() -> ChangepayUser:
-    return ChangepayUser(
-        user_id=str(uuid.uuid4()),
-        phone="6666666666",
-        email="cp@example.com",
-        display_name="CP User",
-        customer_token="cp-token-xyz",
+def _make_oauth_user(
+    provider: str = "google",
+    provider_id: str = "pid-test-001",
+    email: str = "oauth@example.com",
+) -> OAuthUser:
+    return OAuthUser(
+        provider=provider,
+        provider_id=provider_id,
+        email=email,
+        display_name="OAuth User",
+        picture_url="https://lh3.googleusercontent.com/photo",
     )

@@ -63,7 +63,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </nav>
         <div className="border-t border-gray-200 p-4">
           <p className="truncate text-xs font-medium text-gray-700">{user.display_name}</p>
-          <p className="truncate text-xs text-gray-500">{user.phone}</p>
+          <p className="truncate text-xs text-gray-500">{user.email}</p>
           <button
             onClick={handleLogout}
             className="mt-3 flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"

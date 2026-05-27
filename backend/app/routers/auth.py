@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.models.user import User
-from app.schemas.auth import OtpLoginBody, OtpRequestBody, PasswordLoginBody, TokenResponse
+from app.schemas.auth import OAuthLoginBody, TokenResponse
 from app.services.auth import (
     create_access_token,
     create_refresh_token,
@@ -14,7 +14,8 @@ from app.services.auth import (
     rotate_refresh_token,
     upsert_user,
 )
-from app.services.changepay import ChangepayError, get_changepay_client
+from app.services.oauth import get_oauth_provider
+from app.services.oauth.base import ProviderNotConfiguredError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -34,46 +35,22 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
     )
 
 
-def _issue_tokens(response: Response, db: Session, user) -> TokenResponse:
+def _issue_tokens(response: Response, db: Session, user: User) -> TokenResponse:
     access = create_access_token(str(user.id))
     refresh = create_refresh_token(db, user.id)
     _set_refresh_cookie(response, refresh)
     return TokenResponse(
         access_token=access,
-        user={"id": str(user.id), "phone": user.phone, "email": user.email, "display_name": user.display_name},
+        user={
+            "id": str(user.id),
+            "email": user.email,
+            "display_name": user.display_name,
+            "picture_url": user.picture_url,
+        },
     )
 
 
-@router.post("/otp/request")
-async def request_otp(body: OtpRequestBody):
-    try:
-        result = await get_changepay_client().request_otp(body.phone)
-        # In staging the OTP token is in the response — forward it to the client
-        # In production this field is absent (OTP sent by SMS)
-        return {"message": "OTP sent", "debug_token": result.get("token")}
-    except ChangepayError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message)
-
-
-@router.post("/login/otp", response_model=TokenResponse)
-async def login_otp(body: OtpLoginBody, response: Response, db: Session = Depends(get_db)):
-    try:
-        cp_user = await get_changepay_client().login_with_otp(body.phone, body.otp)
-    except ChangepayError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message)
-    user = upsert_user(db, cp_user)
-    return _issue_tokens(response, db, user)
-
-
-@router.post("/login/password", response_model=TokenResponse)
-async def login_password(body: PasswordLoginBody, response: Response, db: Session = Depends(get_db)):
-    try:
-        cp_user = await get_changepay_client().login_with_password(body.phone, body.password)
-    except ChangepayError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message)
-    user = upsert_user(db, cp_user)
-    return _issue_tokens(response, db, user)
-
+# Static routes are registered before /{provider} so they are never captured by it.
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(
@@ -96,7 +73,12 @@ async def refresh_token(
     _set_refresh_cookie(response, new_refresh)
     return TokenResponse(
         access_token=access,
-        user={"id": str(user.id), "phone": user.phone, "email": user.email, "display_name": user.display_name},
+        user={
+            "id": str(user.id),
+            "email": user.email,
+            "display_name": user.display_name,
+            "picture_url": user.picture_url,
+        },
     )
 
 
@@ -109,3 +91,32 @@ async def logout(
     if refresh:
         revoke_refresh_token(db, refresh)
     response.delete_cookie(key=REFRESH_COOKIE, path="/api/v1/auth")
+
+
+@router.post("/{provider}", response_model=TokenResponse)
+async def login_with_oauth(
+    provider: str,
+    body: OAuthLoginBody,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    """Exchange a provider credential for a StudyBuddy access token + refresh cookie.
+
+    The ``provider`` path segment selects the OAuth strategy (e.g. ``google``,
+    ``linkedin``).  The ``credential`` field in the body is provider-specific:
+    an ID token for Google, an authorization code for LinkedIn.
+    """
+    try:
+        oauth_provider = get_oauth_provider(provider)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+    try:
+        oauth_user = await oauth_provider.get_user_info(body.credential)
+    except ProviderNotConfiguredError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
+
+    user = upsert_user(db, oauth_user)
+    return _issue_tokens(response, db, user)
