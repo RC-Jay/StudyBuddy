@@ -12,6 +12,8 @@ class DocumentOut(BaseModel):
     page_count: int | None
     file_size_bytes: int
     processing_status: ProcessingStatus
+    processing_error: str | None
+    doc_type: str | None
     created_at: str
 
     @classmethod
@@ -23,6 +25,8 @@ class DocumentOut(BaseModel):
             page_count=doc.page_count,
             file_size_bytes=doc.file_size_bytes,
             processing_status=doc.processing_status,
+            processing_error=doc.processing_error,
+            doc_type=doc.doc_type,
             created_at=doc.created_at.isoformat(),
         )
 

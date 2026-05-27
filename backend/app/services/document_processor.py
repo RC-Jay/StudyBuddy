@@ -4,8 +4,10 @@ Document ingestion pipeline.
 Responsibilities:
   1. Load raw bytes from storage
   2. Delegate text extraction to the appropriate loader strategy (document_loader.py)
-  3. Split into overlapping chunks (RecursiveCharacterTextSplitter, token-accurate)
-  4. Embed and persist to pgvector via LangChain PGVector
+  3. Classify as book or research paper (reject anything else)
+  4. Split into overlapping chunks (RecursiveCharacterTextSplitter, token-accurate)
+  5. Embed and persist to pgvector via LangChain PGVector
+  6. Auto-generate summaries (chapter-wise for books; full + concepts for papers)
 
 This module is intentionally file-type-agnostic — all format-specific logic
 lives in document_loader.py. Adding support for a new file type requires
@@ -25,10 +27,13 @@ import tiktoken
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.database import SessionLocal
-from app.enums import ProcessingStatus
+from app.enums import DocType, ProcessingStatus
 from app.models.document import Document
+from app.services.auto_summariser import summarise_book, summarise_paper
+from app.services.document_classifier import classify_document
 from app.services.document_loader import get_loader
 from app.services.langchain_setup import get_vectorstore
+from app.services.llm import get_chat_provider
 from app.services.storage import load_file
 
 
@@ -103,10 +108,16 @@ async def process_document(document_id: uuid.UUID) -> None:
         doc.page_count = len(pages)
         db.commit()
 
-        # 4. Split into overlapping chunks
+        # 4. Classify document — reject anything that isn't a book or research paper
+        provider = get_chat_provider()
+        doc_type = await classify_document(pages, provider)
+        doc.doc_type = doc_type.value
+        db.commit()
+
+        # 5. Split into overlapping chunks
         chunks = _build_splitter().split_documents(pages)
 
-        # 5. Enrich chunk metadata for filtering at query time
+        # 6. Enrich chunk metadata for filtering at query time
         for i, chunk in enumerate(chunks):
             # pymupdf4llm sets metadata["page"] as 1-indexed already;
             # ensure it is always present for all loaders
@@ -117,9 +128,21 @@ async def process_document(document_id: uuid.UUID) -> None:
                 "chunk_index": i,
             })
 
-        # 6. Embed and store — serialised across concurrent uploads via _embed_lock
+        # 7. Embed and store — serialised across concurrent uploads via _embed_lock
         vectorstore = get_vectorstore()
         await asyncio.to_thread(_add_documents_batched, vectorstore, chunks, _embed_lock)
+
+        # Embeddings are done — Chat and Quiz are now usable.
+        # Switch to SUMMARISING so the frontend can unlock those tabs
+        # while summaries continue to generate in the background.
+        doc.processing_status = ProcessingStatus.SUMMARISING
+        db.commit()
+
+        # 8. Auto-generate summaries based on document type
+        if doc_type == DocType.BOOK:
+            await summarise_book(doc, pages, db, provider, vectorstore)
+        elif doc_type == DocType.RESEARCH_PAPER:
+            await summarise_paper(doc, pages, db, provider, vectorstore)
 
         doc.processing_status = ProcessingStatus.READY
         db.commit()

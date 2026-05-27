@@ -1,8 +1,8 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import Image from "next/image"
-import { Upload, Trash2, FileText, Loader2, Plus, FolderOpen, LogOut, ChevronDown, ChevronUp, AlertCircle } from "lucide-react"
+import { Upload, Trash2, FileText, Loader2, Plus, FolderOpen, LogOut, ChevronDown, ChevronUp, AlertCircle, FolderPlus, Check } from "lucide-react"
 import api from "@/lib/api"
 import { useAuthStore } from "@/lib/store"
 import { logout } from "@/lib/auth"
@@ -13,10 +13,68 @@ function DocStatusIndicator({ status }: { status: Document["processing_status"] 
   if (status === "processing" || status === "pending") {
     return <Loader2 className="h-3 w-3 shrink-0 animate-spin text-blue-400" />
   }
+  if (status === "summarising") {
+    return <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-400 animate-pulse" />
+  }
   if (status === "failed") {
     return <AlertCircle className="h-3 w-3 shrink-0 text-red-400" />
   }
   return <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-green-400" />
+}
+
+interface CollectionPickerProps {
+  doc: Document
+  collections: Collection[]
+  onToggle: (collId: string, inCollection: boolean) => Promise<void>
+  onClose: () => void
+  anchorRect: DOMRect
+}
+
+function CollectionPicker({ doc, collections, onToggle, onClose, anchorRect }: CollectionPickerProps) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleMouseDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        onClose()
+      }
+    }
+    document.addEventListener("mousedown", handleMouseDown)
+    return () => document.removeEventListener("mousedown", handleMouseDown)
+  }, [onClose])
+
+  // Position: right of the sidebar, aligned with the anchor button
+  const top = Math.min(anchorRect.top, window.innerHeight - 200)
+  const left = anchorRect.right + 4
+
+  return (
+    <div
+      ref={ref}
+      style={{ position: "fixed", top, left, zIndex: 50 }}
+      className="w-48 rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
+    >
+      <p className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400">
+        Add to collection
+      </p>
+      {collections.length === 0 && (
+        <p className="px-3 py-2 text-xs text-gray-400">No collections yet</p>
+      )}
+      {collections.map((coll) => {
+        const isMember = coll.document_ids.includes(doc.id)
+        return (
+          <button
+            key={coll.id}
+            onClick={() => onToggle(coll.id, isMember)}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-gray-50"
+          >
+            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+            <span className="flex-1 truncate">{coll.name}</span>
+            {isMember && <Check className="h-3 w-3 shrink-0 text-indigo-500" />}
+          </button>
+        )
+      })}
+    </div>
+  )
 }
 
 export function LibrarySidebar() {
@@ -31,12 +89,13 @@ export function LibrarySidebar() {
   const [newCollectionName, setNewCollectionName] = useState("")
   const [docsExpanded, setDocsExpanded] = useState(true)
   const [collectionsExpanded, setCollectionsExpanded] = useState(true)
+  const [pickerDocId, setPickerDocId] = useState<string | null>(null)
+  const [pickerAnchorRect, setPickerAnchorRect] = useState<DOMRect | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  function fetchDocs() {
+  const fetchDocs = useCallback(() => {
     api.get<Document[]>("/documents").then(({ data }) => {
       setDocs(data)
-      // Keep scope status in sync when a selected doc transitions (e.g. processing → ready)
       const currentScope = useAuthStore.getState().scope
       if (currentScope?.type === "document") {
         const updated = data.find((d) => d.id === currentScope.id)
@@ -45,7 +104,7 @@ export function LibrarySidebar() {
         }
       }
     })
-  }
+  }, [setScope])
 
   useEffect(() => {
     api.get<Document[]>("/documents").then(({ data }) => setDocs(data))
@@ -53,18 +112,26 @@ export function LibrarySidebar() {
   }, [])
 
   useEffect(() => {
-    const processing = docs.some(
-      (d) => d.processing_status === "pending" || d.processing_status === "processing"
+    const inFlight = docs.some(
+      (d) =>
+        d.processing_status === "pending" ||
+        d.processing_status === "processing" ||
+        d.processing_status === "summarising"
     )
-    if (!processing) return
+    if (!inFlight) return
     const t = setTimeout(fetchDocs, 60000)
     return () => clearTimeout(t)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docs])
+  }, [docs, fetchDocs])
 
   function selectDoc(doc: Document) {
-    if (doc.processing_status !== "ready") return
-    setScope({ type: "document", id: doc.id, name: doc.title, status: doc.processing_status })
+    if (doc.processing_status !== "ready" && doc.processing_status !== "summarising") return
+    setScope({
+      type: "document",
+      id: doc.id,
+      name: doc.title,
+      status: doc.processing_status,
+      doc_type: doc.doc_type ?? undefined,
+    })
   }
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -90,6 +157,36 @@ export function LibrarySidebar() {
     if (scope?.id === id) setScope(null)
   }
 
+  function openPicker(doc: Document, e: React.MouseEvent) {
+    e.stopPropagation()
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    setPickerDocId(doc.id)
+    setPickerAnchorRect(rect)
+  }
+
+  async function handleToggleCollection(collId: string, isMember: boolean) {
+    if (!pickerDocId) return
+    if (isMember) {
+      await api.delete(`/collections/${collId}/documents/${pickerDocId}`)
+      setCollections((prev) =>
+        prev.map((c) =>
+          c.id === collId
+            ? { ...c, document_ids: c.document_ids.filter((id) => id !== pickerDocId), document_count: c.document_count - 1 }
+            : c
+        )
+      )
+    } else {
+      await api.post(`/collections/${collId}/documents/${pickerDocId}`)
+      setCollections((prev) =>
+        prev.map((c) =>
+          c.id === collId
+            ? { ...c, document_ids: [...c.document_ids, pickerDocId], document_count: c.document_count + 1 }
+            : c
+        )
+      )
+    }
+  }
+
   async function handleCreateCollection() {
     const name = newCollectionName.trim()
     if (!name) return
@@ -112,6 +209,8 @@ export function LibrarySidebar() {
     setUser(null)
     router.replace("/login")
   }
+
+  const pickerDoc = pickerDocId ? docs.find((d) => d.id === pickerDocId) ?? null : null
 
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r border-gray-200 bg-white overflow-hidden">
@@ -136,7 +235,7 @@ export function LibrarySidebar() {
           {docsExpanded && (
             <div>
               {docs.map((doc) => {
-                const isReady = doc.processing_status === "ready"
+                const isReady = doc.processing_status === "ready" || doc.processing_status === "summarising"
                 const isSelected = scope?.id === doc.id
                 return (
                   <div
@@ -155,8 +254,22 @@ export function LibrarySidebar() {
                     <DocStatusIndicator status={doc.processing_status} />
                     <span className="flex-1 truncate">{doc.title}</span>
                     {doc.processing_status === "failed" && (
-                      <span className="shrink-0 rounded bg-red-50 px-1 py-0.5 text-xs text-red-500">
+                      <span
+                        title={doc.processing_error ?? undefined}
+                        className="shrink-0 cursor-help rounded bg-red-50 px-1 py-0.5 text-xs text-red-500"
+                      >
                         failed
+                      </span>
+                    )}
+                    {/* Action buttons — visible on row hover */}
+                    {isReady && (
+                      <span
+                        role="button"
+                        onClick={(e) => openPicker(doc, e)}
+                        title="Add to collection"
+                        className="hidden shrink-0 rounded p-0.5 text-gray-300 hover:text-indigo-500 group-hover:block"
+                      >
+                        <FolderPlus className="h-3 w-3" />
                       </span>
                     )}
                     <span
@@ -300,6 +413,17 @@ export function LibrarySidebar() {
           Sign out
         </button>
       </div>
+
+      {/* Collection picker popover */}
+      {pickerDoc && pickerAnchorRect && (
+        <CollectionPicker
+          doc={pickerDoc}
+          collections={collections}
+          onToggle={handleToggleCollection}
+          onClose={() => setPickerDocId(null)}
+          anchorRect={pickerAnchorRect}
+        />
+      )}
     </aside>
   )
 }

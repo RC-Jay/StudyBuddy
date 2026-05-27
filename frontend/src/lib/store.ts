@@ -5,7 +5,8 @@ export interface WorkspaceScope {
   type: "document" | "collection"
   id: string
   name: string
-  status?: "pending" | "processing" | "ready" | "failed"
+  status?: "pending" | "processing" | "summarising" | "ready" | "failed"
+  doc_type?: "book" | "research_paper"
 }
 
 interface AppStore {
@@ -15,8 +16,8 @@ interface AppStore {
   setLoading: (v: boolean) => void
   scope: WorkspaceScope | null
   setScope: (scope: WorkspaceScope | null) => void
-  activeTab: "chat" | "summarise" | "quiz"
-  setActiveTab: (tab: "chat" | "summarise" | "quiz") => void
+  activeTab: "chat" | "summarise" | "quiz" | "documents"
+  setActiveTab: (tab: "chat" | "summarise" | "quiz" | "documents") => void
 }
 
 export const useAuthStore = create<AppStore>((set) => ({

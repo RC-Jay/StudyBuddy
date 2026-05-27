@@ -47,11 +47,12 @@ class TestProcessingStatus:
     def test_values(self):
         assert ProcessingStatus.PENDING == "pending"
         assert ProcessingStatus.PROCESSING == "processing"
+        assert ProcessingStatus.SUMMARISING == "summarising"
         assert ProcessingStatus.READY == "ready"
         assert ProcessingStatus.FAILED == "failed"
 
     def test_all_members(self):
-        assert len(ProcessingStatus) == 4
+        assert len(ProcessingStatus) == 5  # pending, processing, summarising, ready, failed
 
 
 # ---------------------------------------------------------------------------

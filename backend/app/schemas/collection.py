@@ -12,6 +12,7 @@ class CollectionOut(BaseModel):
     name: str
     created_at: str
     document_count: int
+    document_ids: list[str]
 
     @classmethod
     def from_orm(cls, col) -> CollectionOut:
@@ -20,4 +21,5 @@ class CollectionOut(BaseModel):
             name=col.name,
             created_at=col.created_at.isoformat(),
             document_count=len(col.document_links),
+            document_ids=[str(link.document_id) for link in col.document_links],
         )

@@ -16,7 +16,9 @@ export interface Document {
   file_type: string
   page_count: number | null
   file_size_bytes: number
-  processing_status: "pending" | "processing" | "ready" | "failed"
+  processing_status: "pending" | "processing" | "summarising" | "ready" | "failed"
+  processing_error: string | null
+  doc_type: "book" | "research_paper" | null
   created_at: string
 }
 
@@ -25,6 +27,7 @@ export interface Collection {
   name: string
   created_at: string
   document_count: number
+  document_ids: string[]
 }
 
 export interface ChatMessage {
@@ -77,7 +80,7 @@ export interface Summary {
   id: string
   scope_type: string
   scope_id: string
-  granularity: "full" | "section" | "concepts" | "tldr"
+  granularity: "full" | "section" | "concepts" | "tldr" | "chapter"
   section_hint: string | null
   content: string
   created_at: string

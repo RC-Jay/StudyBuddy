@@ -18,6 +18,7 @@ class ScopeType(str, Enum):
 class ProcessingStatus(str, Enum):
     PENDING = "pending"
     PROCESSING = "processing"
+    SUMMARISING = "summarising"  # embeddings done, summaries being auto-generated
     READY = "ready"
     FAILED = "failed"
 
@@ -39,11 +40,17 @@ class Difficulty(str, Enum):
     ADVANCED = "advanced"
 
 
+class DocType(str, Enum):
+    BOOK = "book"
+    RESEARCH_PAPER = "research_paper"
+
+
 class SummaryGranularity(str, Enum):
     FULL = "full"
     TLDR = "tldr"
     CONCEPTS = "concepts"
     SECTION = "section"
+    CHAPTER = "chapter"
 
 
 class MessageRole(str, Enum):

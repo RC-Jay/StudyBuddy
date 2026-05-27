@@ -6,11 +6,16 @@ An AI-powered study assistant for college students. Upload your textbooks, resea
 
 ## What it does
 
+**Supported document types**  
+Only books and research papers are accepted. On upload, an LLM classifies the document; anything else (invoices, slide decks, forms, etc.) is rejected immediately with a clear error message.
+
 **Chat with your documents**  
 Ask questions about your uploaded material and get answers grounded strictly in the source text, with citations back to the exact document and page number.
 
-**Summarise**  
-Generate a full summary, a one-paragraph TLDR, a key concepts list, or a summary of a specific chapter or section — on demand.
+**Auto-generated summaries**  
+Summaries are generated automatically during document processing — no manual trigger needed.
+- *Books* — the pipeline detects chapter/section structure from the table of contents (with regex and equal-split fallbacks) and generates a summary per chapter or section. Summaries appear progressively as each chapter finishes.
+- *Research papers* — generates a full prose summary and a numbered key-concepts list.
 
 **Quiz yourself**  
 Generate multiple choice, short answer, or true/false questions from your material. Questions are stored in a bank and reused across sessions. Difficulty levels map to Bloom's taxonomy — from recall all the way up to evaluation and synthesis.
@@ -19,7 +24,7 @@ Generate multiple choice, short answer, or true/false questions from your materi
 A closed-book, timed quiz that simulates real exam conditions. Source documents are inaccessible during the session. A full debrief with scores, correct answers, and explanations is shown at the end.
 
 **Collections**  
-Organise documents into named collections (e.g. "Organic Chemistry Midterm") and query across all of them in a single chat or quiz session.
+Organise documents into named collections (e.g. "Organic Chemistry Midterm") and query across all of them in a single chat or quiz session. Documents can be added or removed from collections directly in the workspace.
 
 ---
 
@@ -34,7 +39,9 @@ The project is a monorepo with two packages:
 
 **AI layer** — All AI workloads run through Azure OpenAI. GPT-4o-mini handles chat, quiz generation, short-answer evaluation, and summarisation. text-embedding-3-large (3072 dimensions) handles document embeddings for retrieval.
 
-**RAG pipeline** — Uploaded documents are extracted, split into overlapping chunks, and embedded. At query time the most relevant chunks are retrieved from pgvector using cosine similarity and injected as source context into the LLM prompt.
+**RAG pipeline** — Uploaded documents are classified, extracted, split into overlapping 512-token chunks (tiktoken cl100k_base), and embedded. At query time the most relevant chunks are retrieved from pgvector using cosine similarity and injected as source context into the LLM prompt. Embedding is rate-limit-aware: chunks are batched at ~200K tokens per batch with a 65-second pause between batches, and a process-level semaphore serialises concurrent uploads to stay within Azure's 250K tokens/minute cap.
+
+**Processing pipeline** — Documents move through four statuses: `pending` → `processing` (text extraction + embedding) → `summarising` (auto-summary generation) → `ready`. The workspace unlocks for Chat and Quiz as soon as the `summarising` phase begins; summaries appear in the Summaries tab progressively as each chapter completes.
 
 **Auth** — Users sign in with Google or LinkedIn via OAuth. On success, StudyBuddy issues its own short-lived JWT (15 min) and a rolling refresh token (7 days) stored in an httpOnly cookie. OAuth providers are implemented as a Strategy Pattern — adding a new provider is a single subclass with no changes to the router or auth service.
 

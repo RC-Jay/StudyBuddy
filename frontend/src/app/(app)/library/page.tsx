@@ -5,16 +5,37 @@ import { LibrarySidebar } from "@/components/workspace/LibrarySidebar"
 import { ChatTab } from "@/components/workspace/ChatTab"
 import { SummariseTab } from "@/components/workspace/SummariseTab"
 import { QuizTab } from "@/components/workspace/QuizTab"
-import { MessageSquare, FileText, ClipboardList, BookOpen, Loader2, AlertCircle } from "lucide-react"
+import { CollectionDocsTab } from "@/components/workspace/CollectionDocsTab"
+import { MessageSquare, FileText, ClipboardList, BookOpen, Loader2, AlertCircle, Library } from "lucide-react"
+import type { WorkspaceScope } from "@/lib/store"
 
-const tabs = [
+const documentTabs = [
   { id: "chat" as const, label: "Chat", icon: MessageSquare },
-  { id: "summarise" as const, label: "Summarise", icon: FileText },
+  { id: "summarise" as const, label: "Summaries", icon: FileText },
   { id: "quiz" as const, label: "Quiz", icon: ClipboardList },
 ]
 
+const collectionTabs = [
+  { id: "chat" as const, label: "Chat", icon: MessageSquare },
+  { id: "documents" as const, label: "Documents", icon: Library },
+  { id: "quiz" as const, label: "Quiz", icon: ClipboardList },
+]
+
+function getTabsForScope(scope: WorkspaceScope) {
+  return scope.type === "collection" ? collectionTabs : documentTabs
+}
+
 export default function LibraryPage() {
   const { scope, activeTab, setActiveTab } = useAuthStore()
+
+  // If the active tab isn't available for the current scope, fall back to chat
+  const visibleTabs = scope ? getTabsForScope(scope).map((t) => t.id) : []
+  const effectiveTab =
+    scope && visibleTabs.includes(activeTab) ? activeTab : "chat"
+
+  const isSummarising = scope?.status === "summarising"
+  const tabsVisible =
+    !scope?.status || scope.status === "ready" || scope.status === "summarising"
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -39,15 +60,14 @@ export default function LibraryPage() {
             <h1 className="mt-0.5 truncate text-base font-semibold text-gray-900">
               {scope.name}
             </h1>
-            {/* Only show tabs when ready */}
-            {(!scope.status || scope.status === "ready") && (
+            {tabsVisible && (
               <div className="mt-3 flex gap-1">
-                {tabs.map(({ id, label, icon: Icon }) => (
+                {getTabsForScope(scope).map(({ id, label, icon: Icon }) => (
                   <button
                     key={id}
                     onClick={() => setActiveTab(id)}
                     className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition-colors border-b-2 ${
-                      activeTab === id
+                      effectiveTab === id
                         ? "border-indigo-600 text-indigo-700"
                         : "border-transparent text-gray-500 hover:text-gray-700"
                     }`}
@@ -60,6 +80,17 @@ export default function LibraryPage() {
             )}
           </div>
 
+          {/* Summarising banner — shown above tab content */}
+          {isSummarising && (
+            <div className="flex items-center gap-2 border-b border-indigo-100 bg-indigo-50 px-6 py-2">
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-indigo-500" />
+              <p className="text-xs text-indigo-700">
+                Generating summaries in the background — Chat and Quiz are ready to use.
+                Summaries will appear as each section completes.
+              </p>
+            </div>
+          )}
+
           {/* Processing / failed state */}
           {scope.status === "processing" || scope.status === "pending" ? (
             <div className="flex flex-1 items-center justify-center">
@@ -67,7 +98,7 @@ export default function LibraryPage() {
                 <Loader2 className="mx-auto mb-3 h-8 w-8 animate-spin text-indigo-400" />
                 <p className="text-sm font-medium">Processing document…</p>
                 <p className="mt-1 text-xs text-gray-400">
-                  Extracting and embedding content. This usually takes under a minute.
+                  Extracting and embedding content. This usually takes a few minutes.
                 </p>
               </div>
             </div>
@@ -84,14 +115,23 @@ export default function LibraryPage() {
           ) : (
             /* Tab content */
             <div className="flex flex-1 flex-col overflow-hidden">
-              {activeTab === "chat" && (
+              {effectiveTab === "chat" && (
                 <ChatTab key={scope.id} scopeType={scope.type} scopeId={scope.id} />
               )}
-              {activeTab === "summarise" && (
-                <SummariseTab key={scope.id} scopeType={scope.type} scopeId={scope.id} />
+              {effectiveTab === "summarise" && (
+                <SummariseTab
+                  key={scope.id}
+                  scopeType={scope.type}
+                  scopeId={scope.id}
+                  docType={scope.doc_type}
+                  isSummarising={isSummarising}
+                />
               )}
-              {activeTab === "quiz" && (
+              {effectiveTab === "quiz" && (
                 <QuizTab key={scope.id} scopeType={scope.type} scopeId={scope.id} />
+              )}
+              {effectiveTab === "documents" && scope.type === "collection" && (
+                <CollectionDocsTab key={scope.id} collectionId={scope.id} />
               )}
             </div>
           )}
