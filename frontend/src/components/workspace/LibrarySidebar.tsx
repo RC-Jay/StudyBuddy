@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react"
 import Image from "next/image"
-import { Upload, Trash2, FileText, Loader2, Plus, FolderOpen, LogOut, ChevronDown, ChevronUp, AlertCircle, FolderPlus, Check } from "lucide-react"
+import { Upload, Trash2, FileText, Loader2, Plus, FolderOpen, LogOut, ChevronDown, ChevronUp, AlertCircle, FolderPlus, Check, Pencil } from "lucide-react"
 import api from "@/lib/api"
 import { useAuthStore } from "@/lib/store"
 import { logout } from "@/lib/auth"
@@ -91,6 +91,10 @@ export function LibrarySidebar() {
   const [collectionsExpanded, setCollectionsExpanded] = useState(true)
   const [pickerDocId, setPickerDocId] = useState<string | null>(null)
   const [pickerAnchorRect, setPickerAnchorRect] = useState<DOMRect | null>(null)
+  const [renamingDocId, setRenamingDocId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState("")
+  const [renamingCollId, setRenamingCollId] = useState<string | null>(null)
+  const [renameCollValue, setRenameCollValue] = useState("")
   const fileRef = useRef<HTMLInputElement>(null)
 
   const fetchDocs = useCallback(() => {
@@ -158,6 +162,26 @@ export function LibrarySidebar() {
     if (scope?.id === id) setScope(null)
   }
 
+  function startRename(doc: Document, e: React.MouseEvent) {
+    e.stopPropagation()
+    setRenamingDocId(doc.id)
+    setRenameValue(doc.title)
+  }
+
+  async function commitRename(doc: Document) {
+    const trimmed = renameValue.trim()
+    setRenamingDocId(null)
+    if (!trimmed || trimmed === doc.title) return
+    const { data } = await api.patch<Document>(`/documents/${doc.id}`, { title: trimmed })
+    setDocs((prev) => prev.map((d) => (d.id === doc.id ? data : d)))
+    if (scope?.id === doc.id) setScope({ ...scope, name: data.title })
+  }
+
+  function cancelRename() {
+    setRenamingDocId(null)
+    setRenameValue("")
+  }
+
   function openPicker(doc: Document, e: React.MouseEvent) {
     e.stopPropagation()
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -186,6 +210,26 @@ export function LibrarySidebar() {
         )
       )
     }
+  }
+
+  function startRenameCollection(coll: Collection, e: React.MouseEvent) {
+    e.stopPropagation()
+    setRenamingCollId(coll.id)
+    setRenameCollValue(coll.name)
+  }
+
+  async function commitRenameCollection(coll: Collection) {
+    const trimmed = renameCollValue.trim()
+    setRenamingCollId(null)
+    if (!trimmed || trimmed === coll.name) return
+    const { data } = await api.put<Collection>(`/collections/${coll.id}`, { name: trimmed })
+    setCollections((prev) => prev.map((c) => (c.id === coll.id ? data : c)))
+    if (scope?.id === coll.id) setScope({ ...scope, name: data.name })
+  }
+
+  function cancelRenameCollection() {
+    setRenamingCollId(null)
+    setRenameCollValue("")
   }
 
   async function handleCreateCollection() {
@@ -238,12 +282,13 @@ export function LibrarySidebar() {
               {docs.map((doc) => {
                 const isReady = doc.processing_status === "ready" || doc.processing_status === "summarising"
                 const isSelected = scope?.id === doc.id
+                const isRenaming = renamingDocId === doc.id
                 return (
                   <div
                     key={doc.id}
-                    onClick={() => selectDoc(doc)}
+                    onClick={() => !isRenaming && selectDoc(doc)}
                     className={`group flex w-full items-center gap-2.5 px-4 py-2 text-sm transition-colors ${
-                      isReady ? "cursor-pointer" : "cursor-default"
+                      isRenaming ? "cursor-default" : isReady ? "cursor-pointer" : "cursor-default"
                     } ${
                       isSelected
                         ? "bg-indigo-50 text-indigo-700"
@@ -253,8 +298,24 @@ export function LibrarySidebar() {
                     }`}
                   >
                     <DocStatusIndicator status={doc.processing_status} />
-                    <span className="flex-1 truncate">{doc.title}</span>
-                    {doc.processing_status === "failed" && (
+                    {isRenaming ? (
+                      <input
+                        autoFocus
+                        type="text"
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") commitRename(doc)
+                          if (e.key === "Escape") cancelRename()
+                        }}
+                        onBlur={() => commitRename(doc)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex-1 min-w-0 rounded border border-indigo-400 bg-white px-1.5 py-0.5 text-xs text-gray-800 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                      />
+                    ) : (
+                      <span className="flex-1 truncate">{doc.title}</span>
+                    )}
+                    {!isRenaming && doc.processing_status === "failed" && (
                       <span
                         title={doc.processing_error ?? undefined}
                         className="shrink-0 cursor-help rounded bg-red-50 px-1 py-0.5 text-xs text-red-500"
@@ -263,7 +324,17 @@ export function LibrarySidebar() {
                       </span>
                     )}
                     {/* Action buttons — visible on row hover */}
-                    {isReady && (
+                    {!isRenaming && isReady && (
+                      <span
+                        role="button"
+                        onClick={(e) => startRename(doc, e)}
+                        title="Rename"
+                        className="hidden shrink-0 rounded p-0.5 text-gray-300 hover:text-gray-600 group-hover:block"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </span>
+                    )}
+                    {!isRenaming && isReady && (
                       <span
                         role="button"
                         onClick={(e) => openPicker(doc, e)}
@@ -273,13 +344,15 @@ export function LibrarySidebar() {
                         <FolderPlus className="h-3 w-3" />
                       </span>
                     )}
-                    <span
-                      role="button"
-                      onClick={(e) => handleDeleteDoc(doc.id, e)}
-                      className="hidden shrink-0 rounded p-0.5 text-gray-300 hover:text-red-500 group-hover:block"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </span>
+                    {!isRenaming && (
+                      <span
+                        role="button"
+                        onClick={(e) => handleDeleteDoc(doc.id, e)}
+                        className="hidden shrink-0 rounded p-0.5 text-gray-300 hover:text-red-500 group-hover:block"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </span>
+                    )}
                   </div>
                 )
               })}
@@ -326,28 +399,61 @@ export function LibrarySidebar() {
 
           {collectionsExpanded && (
             <div>
-              {collections.map((coll) => (
-                <button
-                  key={coll.id}
-                  onClick={() => setScope({ type: "collection", id: coll.id, name: coll.name })}
-                  className={`group flex w-full items-center gap-2.5 px-4 py-2 text-left text-sm transition-colors ${
-                    scope?.id === coll.id
-                      ? "bg-indigo-50 text-indigo-700"
-                      : "text-gray-700 hover:bg-gray-50"
-                  }`}
-                >
-                  <FolderOpen className="h-3.5 w-3.5 shrink-0 text-gray-400" />
-                  <span className="flex-1 truncate">{coll.name}</span>
-                  <span className="shrink-0 text-xs text-gray-400">{coll.document_count}</span>
-                  <span
-                    role="button"
-                    onClick={(e) => handleDeleteCollection(coll.id, e)}
-                    className="hidden shrink-0 rounded p-0.5 text-gray-300 hover:text-red-500 group-hover:block"
+              {collections.map((coll) => {
+                const isRenamingColl = renamingCollId === coll.id
+                return (
+                  <div
+                    key={coll.id}
+                    onClick={() => !isRenamingColl && setScope({ type: "collection", id: coll.id, name: coll.name })}
+                    className={`group flex w-full cursor-pointer items-center gap-2.5 px-4 py-2 text-left text-sm transition-colors ${
+                      scope?.id === coll.id
+                        ? "bg-indigo-50 text-indigo-700"
+                        : "text-gray-700 hover:bg-gray-50"
+                    }`}
                   >
-                    <Trash2 className="h-3 w-3" />
-                  </span>
-                </button>
-              ))}
+                    <FolderOpen className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+                    {isRenamingColl ? (
+                      <input
+                        autoFocus
+                        type="text"
+                        value={renameCollValue}
+                        onChange={(e) => setRenameCollValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") commitRenameCollection(coll)
+                          if (e.key === "Escape") cancelRenameCollection()
+                        }}
+                        onBlur={() => commitRenameCollection(coll)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex-1 min-w-0 rounded border border-indigo-400 bg-white px-1.5 py-0.5 text-xs text-gray-800 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                      />
+                    ) : (
+                      <span className="flex-1 truncate">{coll.name}</span>
+                    )}
+                    {!isRenamingColl && (
+                      <span className="shrink-0 text-xs text-gray-400">{coll.document_count}</span>
+                    )}
+                    {!isRenamingColl && (
+                      <span
+                        role="button"
+                        onClick={(e) => startRenameCollection(coll, e)}
+                        title="Rename"
+                        className="hidden shrink-0 rounded p-0.5 text-gray-300 hover:text-gray-600 group-hover:block"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </span>
+                    )}
+                    {!isRenamingColl && (
+                      <span
+                        role="button"
+                        onClick={(e) => handleDeleteCollection(coll.id, e)}
+                        className="hidden shrink-0 rounded p-0.5 text-gray-300 hover:text-red-500 group-hover:block"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
 
               {creatingCollection ? (
                 <div className="flex gap-2 px-4 py-2">

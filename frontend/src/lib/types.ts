@@ -12,6 +12,7 @@ export interface AuthState {
 
 export interface Document {
   id: string
+  file_name: string
   title: string
   file_type: string
   page_count: number | null

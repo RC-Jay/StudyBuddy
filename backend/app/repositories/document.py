@@ -37,6 +37,12 @@ class DocumentRepository:
         self._db.refresh(doc)
         return doc
 
+    def rename(self, doc: Document, title: str) -> Document:
+        doc.title = title
+        self._db.commit()
+        self._db.refresh(doc)
+        return doc
+
     def soft_delete(self, doc: Document) -> None:
         doc.deleted_at = datetime.now(timezone.utc)
         self._db.commit()

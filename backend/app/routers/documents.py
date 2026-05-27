@@ -9,7 +9,7 @@ from app.middleware.auth import get_current_user
 from app.models.document import Document
 from app.models.user import User
 from app.repositories.document import DocumentRepository, get_document_repo
-from app.schemas.document import DocumentOut, DocumentStatusOut
+from app.schemas.document import DocumentOut, DocumentRenameIn, DocumentStatusOut
 from app.services.document_processor import process_document
 from app.services.langchain_setup import delete_document_embeddings
 from app.services.storage import delete_file, save_file
@@ -37,9 +37,11 @@ async def upload_document(
         raise HTTPException(status_code=400, detail=f"File exceeds the {settings.max_file_size_mb}MB limit.")
 
     blob_path = await save_file(content, file.filename or "upload")
+    original_name = file.filename or "Untitled"
     doc = repo.create(Document(
         user_id=current_user.id,
-        title=file.filename or "Untitled",
+        file_name=original_name,
+        title=original_name,
         file_type=ALLOWED_TYPES[file.content_type],
         file_size_bytes=len(content),
         blob_path=blob_path,
@@ -75,6 +77,19 @@ def get_processing_status(
 ):
     doc = _require_owned(repo, document_id, current_user.id)
     return DocumentStatusOut(status=doc.processing_status, error=doc.processing_error)
+
+
+@router.patch("/{document_id}", response_model=DocumentOut)
+def rename_document(
+    document_id: uuid.UUID,
+    body: DocumentRenameIn,
+    repo: DocumentRepository = Depends(get_document_repo),
+    current_user: User = Depends(get_current_user),
+):
+    if not body.title.strip():
+        raise HTTPException(status_code=400, detail="Title cannot be empty")
+    doc = _require_owned(repo, document_id, current_user.id)
+    return DocumentOut.from_orm(repo.rename(doc, body.title.strip()))
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)

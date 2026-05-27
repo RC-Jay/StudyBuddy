@@ -7,6 +7,7 @@ from app.enums import ProcessingStatus
 
 class DocumentOut(BaseModel):
     id: str
+    file_name: str
     title: str
     file_type: str
     page_count: int | None
@@ -21,6 +22,7 @@ class DocumentOut(BaseModel):
     def from_orm(cls, doc) -> DocumentOut:
         return cls(
             id=str(doc.id),
+            file_name=doc.file_name,
             title=doc.title,
             file_type=doc.file_type,
             page_count=doc.page_count,
@@ -31,6 +33,10 @@ class DocumentOut(BaseModel):
             expected_summary_count=doc.expected_summary_count,
             created_at=doc.created_at.isoformat(),
         )
+
+
+class DocumentRenameIn(BaseModel):
+    title: str
 
 
 class DocumentStatusOut(BaseModel):
