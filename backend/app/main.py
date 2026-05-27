@@ -1,10 +1,20 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers import auth, chat, collections, documents, quiz, summaries
+from app.services.document_processor import recover_interrupted_documents
 
-app = FastAPI(title="StudyBuddy API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await recover_interrupted_documents()
+    yield
+
+
+app = FastAPI(title="StudyBuddy API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

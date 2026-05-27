@@ -232,22 +232,29 @@ async def summarise_book(
     db: Session,
     provider: BaseChatProvider,
     vectorstore: VectorStore,
+    done_hints: set[str] | None = None,
 ) -> None:
     """
     Generate chapter/section summaries for a book.
 
     Three-stage detection for chapter structure, then one LLM call per section.
     Each summary is persisted as a Summary row with granularity=CHAPTER.
+
+    done_hints: section_hint values that already have a summary row — skipped
+    on resume so completed chapters are not regenerated.
     """
-    logger.info("Starting book summarisation for document %s", doc.id)
+    skip = done_hints or set()
+    logger.info("Starting book summarisation for document %s (skipping %d done)", doc.id, len(skip))
 
     # Stage 1: LLM hierarchical TOC
     chapters = await _extract_toc_llm(pages, provider)
     if chapters:
         logger.info("TOC stage 1 succeeded: %d chapters", len(chapters))
         sections_with_queries = _toc_to_sections(chapters)
-        # Retrieve relevant chunks for each section via vector search
         for section_hint, query in sections_with_queries:
+            if section_hint in skip:
+                logger.debug("Skipping already-done section '%s'", section_hint)
+                continue
             try:
                 results = vectorstore.similarity_search(
                     query,
@@ -274,6 +281,8 @@ async def summarise_book(
     if regex_sections:
         logger.info("TOC stage 2 (regex) succeeded: %d sections", len(regex_sections))
         for heading, section_pages in regex_sections:
+            if heading in skip:
+                continue
             try:
                 context = "\n\n".join(p.page_content for p in section_pages)
                 if len(context) > 15000:
@@ -296,6 +305,8 @@ async def summarise_book(
     logger.info("TOC stage 3 (equal split) for document %s", doc.id)
     fallback_sections = _equal_split_fallback(pages)
     for part_label, part_pages in fallback_sections:
+        if part_label in skip:
+            continue
         try:
             context = "\n\n".join(p.page_content for p in part_pages)
             if len(context) > 15000:
@@ -322,13 +333,17 @@ async def summarise_paper(
     db: Session,
     provider: BaseChatProvider,
     vectorstore: VectorStore,  # kept for interface consistency; not used for papers
+    done_granularities: set[str] | None = None,
 ) -> None:
     """
     Generate a full summary and key concepts for a research paper.
 
     Uses the raw page text directly (more complete than retrieval for short papers).
     Persists two Summary rows: granularity=FULL and granularity=CONCEPTS.
+
+    done_granularities: granularity values that already have a row — skipped on resume.
     """
+    skip = done_granularities or set()
     logger.info("Starting paper summarisation for document %s", doc.id)
 
     paper_pages = pages[:_PAPER_MAX_PAGES]
@@ -339,27 +354,29 @@ async def summarise_paper(
         full_text = full_text[:20000]
 
     # Full summary
-    try:
-        summary_text = await provider.complete(
-            [
-                {"role": "system", "content": _PAPER_SUMMARY_SYSTEM},
-                {"role": "user", "content": full_text},
-            ],
-            temperature=0.3,
-        )
-        _save_summary(db, doc, SummaryGranularity.FULL, summary_text)
-    except Exception as exc:
-        logger.error("Failed to generate paper summary for %s: %s", doc.id, exc)
+    if SummaryGranularity.FULL.value not in skip:
+        try:
+            summary_text = await provider.complete(
+                [
+                    {"role": "system", "content": _PAPER_SUMMARY_SYSTEM},
+                    {"role": "user", "content": full_text},
+                ],
+                temperature=0.3,
+            )
+            _save_summary(db, doc, SummaryGranularity.FULL, summary_text)
+        except Exception as exc:
+            logger.error("Failed to generate paper summary for %s: %s", doc.id, exc)
 
     # Key concepts
-    try:
-        concepts_text = await provider.complete(
-            [
-                {"role": "system", "content": _PAPER_CONCEPTS_SYSTEM},
-                {"role": "user", "content": full_text},
-            ],
-            temperature=0.3,
-        )
-        _save_summary(db, doc, SummaryGranularity.CONCEPTS, concepts_text)
-    except Exception as exc:
-        logger.error("Failed to generate paper concepts for %s: %s", doc.id, exc)
+    if SummaryGranularity.CONCEPTS.value not in skip:
+        try:
+            concepts_text = await provider.complete(
+                [
+                    {"role": "system", "content": _PAPER_CONCEPTS_SYSTEM},
+                    {"role": "user", "content": full_text},
+                ],
+                temperature=0.3,
+            )
+            _save_summary(db, doc, SummaryGranularity.CONCEPTS, concepts_text)
+        except Exception as exc:
+            logger.error("Failed to generate paper concepts for %s: %s", doc.id, exc)
