@@ -29,7 +29,7 @@ from app.database import SessionLocal
 from app.enums import DocType, ProcessingStatus
 from app.models.document import Document
 from app.services.auto_summariser import summarise_video
-from app.services.langchain_setup import delete_document_embeddings, get_vectorstore
+from app.services.langchain_setup import get_vectorstore
 from app.services.llm import get_chat_provider
 from app.services.video import get_video_loader
 from app.services.video.base import VideoContent

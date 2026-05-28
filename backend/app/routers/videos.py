@@ -8,7 +8,6 @@ POST /videos   — submit a video URL for ingestion.
 The response is a DocumentOut (same shape as document uploads) so the
 frontend can treat videos and documents uniformly in polling / display.
 """
-import uuid
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status

@@ -32,9 +32,7 @@ are stored:
 import asyncio
 import json
 import logging
-import os
 import re
-import tempfile
 import uuid
 from collections import Counter, defaultdict
 
@@ -1104,8 +1102,6 @@ async def summarise_video(
 
     done_hints: section_hints already stored — skipped on resume.
     """
-    from app.services.video.base import VideoContent as VC  # avoid circular import
-
     skip = done_hints or set()
     transcript = content.transcript
     duration = content.duration_seconds or 0

@@ -1,5 +1,3 @@
-import uuid
-
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
