@@ -41,7 +41,6 @@ async def _recover_interrupted_videos() -> None:
                     ProcessingStatus.PROCESSING,
                     ProcessingStatus.SUMMARISING,
                 ]),
-                Document.deleted_at.is_(None),
             )
             .all()
         )

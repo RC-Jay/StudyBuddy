@@ -6,7 +6,11 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFi
 from app.config import settings
 from app.enums import ProcessingStatus
 from app.middleware.auth import get_current_user
+from app.models.chat import ChatSession
+from app.models.collection import CollectionDocument
 from app.models.document import Document
+from app.models.quiz import Question, QuizSession
+from app.models.summary import Summary
 from app.models.user import User
 from app.repositories.document import DocumentRepository, get_document_repo
 from app.schemas.document import DocumentOut, DocumentRenameIn, DocumentStatusOut
@@ -99,19 +103,53 @@ async def delete_document(
     current_user: User = Depends(get_current_user),
 ):
     doc = _require_owned(repo, document_id, current_user.id)
+    db = repo.db
 
-    # Best-effort: remove embeddings then file (neither blocks the soft-delete)
+    # 1. Remove embeddings from the vector store (best-effort — non-fatal)
     try:
         await asyncio.to_thread(delete_document_embeddings, doc.id)
     except Exception:
         pass
 
-    repo.soft_delete(doc)
+    # 2. Delete all related rows that have no FK to documents (orphan-safe cleanup).
+    #    Order matters: collection_links must go before the document row itself (FK).
 
-    try:
-        await delete_file(doc.blob_path)
-    except Exception:
-        pass
+    # Summaries (scope_id is a plain UUID — no FK, so this is just a cleanup query)
+    db.query(Summary).filter_by(scope_type="document", scope_id=doc.id).delete(
+        synchronize_session=False
+    )
+
+    # Chat sessions + their messages (cascade="all, delete-orphan" on ChatSession.messages)
+    chat_sessions = (
+        db.query(ChatSession).filter_by(scope_type="document", scope_id=doc.id).all()
+    )
+    for session in chat_sessions:
+        db.delete(session)
+
+    # Quiz sessions
+    db.query(QuizSession).filter_by(scope_type="document", scope_id=doc.id).delete(
+        synchronize_session=False
+    )
+
+    # Questions generated from this document (cascade deletes QuestionFeedback)
+    questions = db.query(Question).filter_by(source_document_id=doc.id).all()
+    for question in questions:
+        db.delete(question)
+
+    # Collection memberships (FK → documents.id, must be deleted before the document)
+    db.query(CollectionDocument).filter_by(document_id=doc.id).delete(
+        synchronize_session=False
+    )
+
+    # 3. Hard-delete the document row
+    repo.delete(doc)
+
+    # 4. Remove the blob file (best-effort — no blob for videos, silently skipped)
+    if doc.blob_path:
+        try:
+            await delete_file(doc.blob_path)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------

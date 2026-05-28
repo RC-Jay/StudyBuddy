@@ -104,9 +104,8 @@ async def _complete_with_retry(
 # ─── Deletion guard ───────────────────────────────────────────────────────────
 
 def _is_deleted(doc: Document, db: Session) -> bool:
-    """Refresh the document from DB and return True if it has been soft-deleted."""
-    db.refresh(doc)
-    return doc.deleted_at is not None
+    """Return True if the document has been hard-deleted while the pipeline was running."""
+    return db.query(Document).filter_by(id=doc.id).first() is None
 
 
 # ─── Prompts ──────────────────────────────────────────────────────────────────

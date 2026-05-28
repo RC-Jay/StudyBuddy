@@ -57,10 +57,11 @@ class TestDocumentRepositoryGetOwned:
     def test_returns_none_for_nonexistent(self, repo, test_user):
         assert repo.get_owned(uuid.uuid4(), test_user.id) is None
 
-    def test_returns_none_for_soft_deleted(self, repo, test_user):
+    def test_returns_none_after_delete(self, repo, test_user):
         doc = repo.create(_new_doc(test_user.id))
-        repo.soft_delete(doc)
-        assert repo.get_owned(doc.id, test_user.id) is None
+        doc_id = doc.id
+        repo.delete(doc)
+        assert repo.get_owned(doc_id, test_user.id) is None
 
 
 class TestDocumentRepositoryListForUser:
@@ -75,9 +76,9 @@ class TestDocumentRepositoryListForUser:
         assert "Own Doc 2" in titles
         assert "Other's Doc" not in titles
 
-    def test_excludes_soft_deleted(self, repo, test_user):
+    def test_excludes_deleted(self, repo, test_user):
         doc = repo.create(_new_doc(test_user.id, "Will Delete"))
-        repo.soft_delete(doc)
+        repo.delete(doc)
         titles = [d.title for d in repo.list_for_user(test_user.id)]
         assert "Will Delete" not in titles
 
@@ -98,9 +99,10 @@ class TestDocumentRepositoryListForUser:
         assert repo.list_for_user(other_user.id) == []
 
 
-class TestDocumentRepositorySoftDelete:
-    def test_sets_deleted_at(self, repo, test_user):
+class TestDocumentRepositoryDelete:
+    def test_hard_delete_removes_row(self, repo, test_user):
         doc = repo.create(_new_doc(test_user.id))
-        assert doc.deleted_at is None
-        repo.soft_delete(doc)
-        assert doc.deleted_at is not None
+        doc_id = doc.id
+        repo.delete(doc)
+        assert repo.get_owned(doc_id, test_user.id) is None
+        assert repo.list_for_user(test_user.id) == []
