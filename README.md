@@ -7,7 +7,9 @@ An AI-powered study assistant for college students. Upload your textbooks, resea
 ## What it does
 
 **Supported document types**  
-Only books and research papers are accepted. On upload, an LLM classifies the document; anything else (invoices, slide decks, forms, etc.) is rejected immediately with a clear error message.
+Only academic/technical books and research papers are accepted. On upload, an LLM classifies the document across two dimensions — structural type (book vs. research paper) and academic relevance. Rejected documents receive a specific error message explaining why:
+- *Wrong type* — invoices, slide decks, forms, manuals, etc.
+- *Non-academic book* — fiction, biographies, self-help, comics, cookbooks, and other general-interest books that wouldn't be used as course material.
 
 **Chat with your documents**  
 Ask questions about your uploaded material and get answers grounded strictly in the source text, with citations back to the exact document and page number.
