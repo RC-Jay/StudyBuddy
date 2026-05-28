@@ -15,7 +15,10 @@ Metadata:
 
 No official YouTube Data API v3 key is required. If `YOUTUBE_API_KEY` is set
 in the environment, the loader will use it for richer metadata.
+
+Compatibility note: requires youtube-transcript-api >= 1.0.0 (instance-based API).
 """
+import asyncio
 import logging
 import re
 
@@ -88,23 +91,6 @@ async def _fetch_oembed(video_id: str) -> dict:
         return {}
 
 
-async def _fetch_description(video_id: str) -> str:
-    """
-    Fetch the video description via yt-dlp (no download, metadata only).
-    Returns empty string on failure.
-    """
-    try:
-        import asyncio
-
-        result = await asyncio.to_thread(
-            _yt_dlp_info, f"https://www.youtube.com/watch?v={video_id}"
-        )
-        return result.get("description", "") or ""
-    except Exception as exc:
-        logger.warning("Description fetch via yt-dlp failed for %s: %s", video_id, exc)
-        return ""
-
-
 def _yt_dlp_info(url: str) -> dict:
     """Synchronous yt-dlp metadata extraction (no video download)."""
     import yt_dlp
@@ -119,50 +105,112 @@ def _yt_dlp_info(url: str) -> dict:
         return ydl.extract_info(url, download=False) or {}
 
 
-def _yt_dlp_duration(video_id: str) -> int | None:
-    """Fetch video duration in seconds via yt-dlp."""
+async def _fetch_yt_metadata(video_id: str) -> dict:
+    """
+    Fetch description, duration, and chapters via yt-dlp (single async-threaded call).
+
+    Returns:
+      {
+        "description": str,
+        "duration":    int | None,
+        "chapters":    list[dict] | None,  # yt-dlp chapter dicts with start_time/end_time/title
+      }
+
+    yt-dlp chapters (info["chapters"]) are set via YouTube Studio and are more
+    reliable than timestamp lines in the description text. When present they take
+    precedence over description parsing.
+    """
     try:
-        info = _yt_dlp_info(f"https://www.youtube.com/watch?v={video_id}")
-        return int(info.get("duration") or 0) or None
+        info = await asyncio.to_thread(
+            _yt_dlp_info, f"https://www.youtube.com/watch?v={video_id}"
+        )
+        return {
+            "description": info.get("description", "") or "",
+            "duration": int(info.get("duration") or 0) or None,
+            "chapters": info.get("chapters") or None,   # list of {start_time, end_time, title}
+        }
     except Exception as exc:
-        logger.warning("Duration fetch via yt-dlp failed for %s: %s", video_id, exc)
-        return None
+        logger.warning("yt-dlp metadata fetch failed for %s: %s", video_id, exc)
+        return {"description": "", "duration": None, "chapters": None}
 
 
 def _fetch_transcript(video_id: str) -> tuple[str, str]:
     """
-    Fetch transcript using youtube-transcript-api.
+    Fetch transcript using youtube-transcript-api (v1.x instance-based API).
     Returns (transcript_text, language_code).
     Raises ValueError if no transcript is available.
+
+    v1.x notes:
+      - YouTubeTranscriptApi must be instantiated (not used as class methods)
+      - Method renamed: list_transcripts() → list()
+      - Transcript snippets are FetchedTranscriptSnippet dataclasses (use .text, not .get())
     """
-    from youtube_transcript_api import (
-        NoTranscriptFound,
-        TranscriptsDisabled,
-        YouTubeTranscriptApi,
-    )
+    from youtube_transcript_api import YouTubeTranscriptApi
+    from youtube_transcript_api._transcripts import TranscriptList
 
     try:
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        api = YouTubeTranscriptApi()
+        transcript_list: TranscriptList = api.list(video_id)
 
         # Prefer manually created transcripts; fall back to auto-generated
+        from youtube_transcript_api._errors import NoTranscriptFound
         try:
             transcript = transcript_list.find_manually_created_transcript(["en", "en-US", "en-GB"])
         except NoTranscriptFound:
-            # Try auto-generated English
             try:
                 transcript = transcript_list.find_generated_transcript(["en", "en-US", "en-GB"])
             except NoTranscriptFound:
-                # Use whatever is available first (may need translation)
+                # Use whatever is available first (any language)
                 transcript = next(iter(transcript_list))
 
-        entries = transcript.fetch()
-        text = " ".join(e.get("text", "") for e in entries).strip()
-        return text, transcript.language_code
+        fetched = transcript.fetch()
+        # v1.x: snippets are FetchedTranscriptSnippet dataclasses — use .text not .get()
+        text = " ".join(snippet.text for snippet in fetched).strip()
+        return text, fetched.language_code
 
-    except TranscriptsDisabled:
-        raise ValueError("Transcripts are disabled for this YouTube video.")
+    except ValueError:
+        raise
     except Exception as exc:
+        # Check for transcripts-disabled error by class name (avoids version-specific imports)
+        exc_name = type(exc).__name__
+        if "TranscriptsDisabled" in exc_name or "Disabled" in exc_name:
+            raise ValueError("Transcripts are disabled for this YouTube video.") from exc
         raise ValueError(f"Could not fetch YouTube transcript: {exc}") from exc
+
+
+def _build_chapters_from_yt_dlp(
+    yt_chapters: list[dict],
+    transcript: str,
+    duration: int | None,
+) -> list[VideoChapter]:
+    """
+    Convert yt-dlp chapter dicts into VideoChapter objects.
+
+    yt-dlp format: [{"start_time": 0.0, "end_time": 123.4, "title": "Introduction"}, ...]
+    These are defined via YouTube Studio and are the authoritative source.
+    """
+    if not yt_chapters:
+        return []
+
+    total_duration = duration or (int(yt_chapters[-1].get("end_time", 0)) + 1)
+    total_chars = len(transcript)
+    chapters = []
+
+    for ch in yt_chapters:
+        title = ch.get("title", "").strip() or "Section"
+        start = int(ch.get("start_time") or 0)
+        end = int(ch.get("end_time") or total_duration)
+        char_start = int(start / total_duration * total_chars)
+        char_end = int(end / total_duration * total_chars)
+        chapter_text = transcript[char_start:char_end].strip()
+        chapters.append(VideoChapter(
+            title=title,
+            start_seconds=start,
+            end_seconds=end,
+            transcript=chapter_text,
+        ))
+
+    return chapters
 
 
 def _build_chapters(
@@ -173,8 +221,7 @@ def _build_chapters(
     """
     Build VideoChapter objects from (start_seconds, title) pairs.
     Assigns a transcript slice to each chapter by estimating character offsets
-    proportionally (transcript timestamps from the API aren't used here for
-    simplicity; the text is approximate but good enough for embeddings).
+    proportionally.
     """
     if not chapter_timestamps:
         return []
@@ -185,7 +232,6 @@ def _build_chapters(
 
     for i, (start, title) in enumerate(chapter_timestamps):
         end = chapter_timestamps[i + 1][0] if i + 1 < len(chapter_timestamps) else total_duration
-        # Proportional character slice
         char_start = int(start / total_duration * total_chars)
         char_end = int(end / total_duration * total_chars)
         chapter_text = transcript[char_start:char_end].strip()
@@ -219,34 +265,37 @@ class YouTubeLoader(BaseVideoLoader):
 
         canonical_url = f"https://www.youtube.com/watch?v={video_id}"
 
-        # 1. Fetch metadata (oEmbed is fast; yt-dlp is async-threaded)
-        import asyncio
-        oembed, description = await asyncio.gather(
+        # 1. Fetch oEmbed metadata and yt-dlp metadata concurrently (single yt-dlp call)
+        oembed, yt_meta = await asyncio.gather(
             _fetch_oembed(video_id),
-            _fetch_description(video_id),
+            _fetch_yt_metadata(video_id),
         )
 
         title = oembed.get("title") or f"YouTube video {video_id}"
         channel = oembed.get("author_name")
         thumbnail = oembed.get("thumbnail_url")
+        description = yt_meta["description"]
+        duration = yt_meta["duration"]
 
-        # Duration from yt-dlp info (already fetched via description call)
-        try:
-            info = _yt_dlp_info(canonical_url)
-            duration = int(info.get("duration") or 0) or None
-        except Exception:
-            duration = None
-
-        # 2. Fetch transcript
-        import asyncio as _asyncio
-        transcript_text, lang_code = await _asyncio.to_thread(_fetch_transcript, video_id)
+        # 2. Fetch transcript (async-threaded — blocking network call)
+        transcript_text, lang_code = await asyncio.to_thread(_fetch_transcript, video_id)
 
         if not transcript_text:
             raise ValueError("The transcript for this video is empty.")
 
-        # 3. Parse chapters from description
-        chapter_timestamps = _parse_chapters_from_description(description)
-        chapters = _build_chapters(chapter_timestamps, transcript_text, duration)
+        # 3. Build chapters — prefer yt-dlp structured chapters (YouTube Studio),
+        #    fall back to parsing timestamp lines from the description text.
+        yt_dlp_chapters = yt_meta.get("chapters")
+        if yt_dlp_chapters:
+            logger.info("Using %d yt-dlp chapters for %s", len(yt_dlp_chapters), video_id)
+            chapters = _build_chapters_from_yt_dlp(yt_dlp_chapters, transcript_text, duration)
+        else:
+            chapter_timestamps = _parse_chapters_from_description(description)
+            chapters = _build_chapters(chapter_timestamps, transcript_text, duration)
+            if chapters:
+                logger.info("Using %d description-parsed chapters for %s", len(chapters), video_id)
+            else:
+                logger.info("No chapters found for %s — summariser will segment", video_id)
 
         return VideoContent(
             url=canonical_url,

@@ -127,14 +127,18 @@ function DocRow({
   onRenameStart, onOpenPicker, onDelete,
 }: DocRowProps) {
   const isReady = doc.processing_status === "ready" || doc.processing_status === "summarising"
+  const isFailed = doc.processing_status === "failed"
   return (
     <div
       onClick={() => !isRenaming && onSelect()}
+      title={isFailed ? (doc.processing_error ?? "Processing failed") : undefined}
       className={`group flex w-full items-center gap-2.5 px-4 py-2 text-sm transition-colors ${
-        isRenaming ? "cursor-default" : isReady ? "cursor-pointer" : "cursor-default"
+        isFailed ? "cursor-help" : isRenaming ? "cursor-default" : isReady ? "cursor-pointer" : "cursor-default"
       } ${
         isSelected
           ? "bg-indigo-50 text-indigo-700"
+          : isFailed
+          ? "text-red-400 hover:bg-red-50"
           : isReady
           ? "text-gray-700 hover:bg-gray-50"
           : "text-gray-400"
@@ -158,11 +162,9 @@ function DocRow({
       ) : (
         <span className="flex-1 truncate">{doc.title}</span>
       )}
-      {!isRenaming && doc.processing_status === "failed" && (
-        <span
-          title={doc.processing_error ?? undefined}
-          className="shrink-0 cursor-help rounded bg-red-50 px-1 py-0.5 text-xs text-red-500"
-        >
+      {!isRenaming && isFailed && (
+        <span className="shrink-0 rounded bg-red-50 px-1 py-0.5 text-xs text-red-500 flex items-center gap-0.5">
+          <AlertCircle className="h-3 w-3" />
           failed
         </span>
       )}
@@ -194,14 +196,18 @@ function VideoRow({
   onRenameStart, onOpenPicker, onDelete,
 }: DocRowProps) {
   const isReady = doc.processing_status === "ready" || doc.processing_status === "summarising"
+  const isFailed = doc.processing_status === "failed"
   return (
     <div
       onClick={() => !isRenaming && onSelect()}
+      title={isFailed ? (doc.processing_error ?? "Processing failed") : undefined}
       className={`group flex w-full items-start gap-2.5 px-4 py-2 text-sm transition-colors ${
-        isRenaming ? "cursor-default" : isReady ? "cursor-pointer" : "cursor-default"
+        isFailed ? "cursor-help" : isRenaming ? "cursor-default" : isReady ? "cursor-pointer" : "cursor-default"
       } ${
         isSelected
           ? "bg-indigo-50 text-indigo-700"
+          : isFailed
+          ? "text-red-400 hover:bg-red-50"
           : isReady
           ? "text-gray-700 hover:bg-gray-50"
           : "text-gray-400"
@@ -248,16 +254,17 @@ function VideoRow({
             {doc.video_source && (
               <SourceBadge source={doc.video_source} url={doc.source_url} />
             )}
-            {doc.duration_seconds ? (
-              <span className="text-[10px] text-gray-400">{formatDuration(doc.duration_seconds)}</span>
-            ) : doc.processing_status !== "failed" && (
-              <DocStatusIndicator status={doc.processing_status} />
-            )}
-            {doc.processing_status === "failed" && (
-              <span title={doc.processing_error ?? undefined}
-                className="cursor-help text-[10px] text-red-500">
-                failed
+            {isFailed ? (
+              <span className="flex items-center gap-0.5 text-[10px] text-red-500">
+                <AlertCircle className="h-3 w-3 shrink-0" />
+                <span className="truncate max-w-[120px]">
+                  {doc.processing_error ?? "Processing failed"}
+                </span>
               </span>
+            ) : doc.duration_seconds ? (
+              <span className="text-[10px] text-gray-400">{formatDuration(doc.duration_seconds)}</span>
+            ) : (
+              <DocStatusIndicator status={doc.processing_status} />
             )}
           </div>
         )}
@@ -523,7 +530,12 @@ export function LibrarySidebar() {
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r border-gray-200 bg-white overflow-hidden">
       <div className="px-4 py-4 border-b border-gray-100 shrink-0">
-        <span className="text-lg font-bold text-indigo-600">StudyBuddy</span>
+        <button
+          onClick={() => setScope(null)}
+          className="text-lg font-bold text-indigo-600 hover:text-indigo-500 transition-colors"
+        >
+          StudyBuddy
+        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto">

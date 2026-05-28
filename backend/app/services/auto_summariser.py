@@ -695,7 +695,7 @@ def _extract_toc_regex(pages: list[LCDocument]) -> list[tuple[str, str]]:
 
 
 def _equal_split_fallback(pages: list[LCDocument], n_parts: int = 4) -> list[tuple[str, list[LCDocument]]]:
-    """Stage 3: Divide pages evenly into n_parts labelled 'Part 1'…'Part N'."""
+    """Stage 3: Divide pages evenly into n_parts labelled by page range (e.g. 'Pages 1–80')."""
     total = len(pages)
     chunk = max(1, total // n_parts)
     result = []
@@ -704,7 +704,11 @@ def _equal_split_fallback(pages: list[LCDocument], n_parts: int = 4) -> list[tup
         end = start + chunk if i < n_parts - 1 else total
         part_pages = pages[start:end]
         if part_pages:
-            result.append((f"Part {i + 1}", part_pages))
+            # Use 1-based page numbers from metadata when available; fall back to indices.
+            page_start = part_pages[0].metadata.get("page", start) + 1
+            page_end = part_pages[-1].metadata.get("page", end - 1) + 1
+            label = f"Pages {page_start}–{page_end}"
+            result.append((label, part_pages))
     return result
 
 
@@ -974,6 +978,16 @@ Include 6–12 concepts.
 _SHORT_VIDEO_THRESHOLD = 1200   # 20 minutes — use LLM segmentation below this
 _FIXED_WINDOW_CHARS = 3000      # ~5 min equivalent at average speech rate
 
+_WINDOW_TITLES_SYSTEM = """\
+You are given several consecutive excerpts from a long educational video transcript.
+For each excerpt, generate a concise, descriptive title (4–8 words) that captures the main topic.
+
+Return ONLY a JSON object — no extra text, no markdown fences:
+{"titles": ["Title for excerpt 1", "Title for excerpt 2", ...]}
+
+Include exactly as many titles as there are excerpts.
+"""
+
 
 async def _llm_segment_transcript(
     transcript: str,
@@ -1019,19 +1033,54 @@ async def _llm_segment_transcript(
         ]
 
 
-def _fixed_window_segments(transcript: str) -> list[tuple[str, str]]:
-    """Divide a long transcript into fixed-size windows."""
-    segments = []
+async def _fixed_window_segments(
+    transcript: str,
+    provider: BaseChatProvider,
+) -> list[tuple[str, str]]:
+    """
+    Divide a long transcript into fixed-size windows with LLM-generated titles.
+
+    Sends the first 300 chars of each window to the LLM in a single call to get
+    descriptive titles. Falls back to generic "Part N" labels on any error.
+    """
+    raw: list[str] = []
     total = len(transcript)
     i = 0
-    part = 1
     while i < total:
         text = transcript[i : i + _FIXED_WINDOW_CHARS].strip()
         if text:
-            segments.append((f"Part {part}", text))
-            part += 1
+            raw.append(text)
         i += _FIXED_WINDOW_CHARS
-    return segments
+
+    if not raw:
+        return []
+
+    # Build one LLM call with a snippet of each window
+    snippets = "\n\n".join(
+        f"Excerpt {j + 1}:\n{seg[:300]}" for j, seg in enumerate(raw)
+    )
+    try:
+        response = await _complete_with_retry(
+            provider,
+            [
+                {"role": "system", "content": _WINDOW_TITLES_SYSTEM},
+                {"role": "user", "content": snippets},
+            ],
+            temperature=0.2,
+        )
+        import json as _json
+        data = _json.loads(response.strip())
+        titles = data.get("titles", [])
+        if isinstance(titles, list) and len(titles) == len(raw):
+            return list(zip(titles, raw))
+        logger.warning(
+            "Window title count mismatch: got %d titles for %d windows — using generic labels",
+            len(titles), len(raw),
+        )
+    except Exception as exc:
+        logger.warning("Window title generation failed: %s — using generic labels", exc)
+
+    return [(f"Part {j + 1}", seg) for j, seg in enumerate(raw)]
 
 
 async def summarise_video(
@@ -1072,7 +1121,7 @@ async def summarise_video(
         segments = await _llm_segment_transcript(transcript, provider)
         logger.info("LLM segmented into %d sections", len(segments))
     else:
-        segments = _fixed_window_segments(transcript)
+        segments = await _fixed_window_segments(transcript, provider)
         logger.info("Fixed-window segmented into %d parts", len(segments))
 
     # ── Persist TOC so frontend can render outline immediately ────────────────
