@@ -68,6 +68,14 @@ async def submit_video(
             ),
         )
 
+    # Reject duplicate submissions (same user + URL already exists).
+    existing = repo.get_by_source_url(current_user.id, body.url)
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail="This video has already been added to your library.",
+        )
+
     # Create a placeholder Document row — title and metadata will be filled in
     # by the background pipeline once the video is fetched.
     placeholder_title = _url_to_placeholder_title(body.url)

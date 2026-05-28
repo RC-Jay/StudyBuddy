@@ -44,6 +44,14 @@ class DocumentRepository:
         self._db.refresh(doc)
         return doc
 
+    def get_by_source_url(self, user_id: uuid.UUID, source_url: str) -> Document | None:
+        """Return an existing video document with the given source URL, or None."""
+        return (
+            self._db.query(Document)
+            .filter_by(user_id=user_id, source_url=source_url)
+            .first()
+        )
+
     def delete(self, doc: Document) -> None:
         """Hard-delete the document row. Caller must clean up related data first."""
         self._db.delete(doc)
