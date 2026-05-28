@@ -3,7 +3,9 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.middleware.auth import get_current_user
+from app.models.chat import ChatSession
 from app.models.collection import Collection
+from app.models.quiz import Question, QuizSession
 from app.models.user import User
 from app.repositories.collection import CollectionRepository, get_collection_repo
 from app.repositories.document import DocumentRepository, get_document_repo
@@ -57,7 +59,25 @@ def delete_collection(
     repo: CollectionRepository = Depends(get_collection_repo),
     current_user: User = Depends(get_current_user),
 ):
-    repo.delete(_require_owned(repo, collection_id, current_user.id))
+    col = _require_owned(repo, collection_id, current_user.id)
+    db = repo.db
+
+    # Clean up collection-scoped chat sessions (ORM cascade removes their messages)
+    for session in db.query(ChatSession).filter_by(scope_type="collection", scope_id=col.id).all():
+        db.delete(session)
+
+    # Clean up collection-scoped quiz sessions
+    db.query(QuizSession).filter_by(scope_type="collection", scope_id=col.id).delete(
+        synchronize_session=False
+    )
+
+    # Clean up collection-scoped questions (ORM cascade removes QuestionFeedback)
+    for question in db.query(Question).filter_by(scope_type="collection", scope_id=col.id).all():
+        db.delete(question)
+
+    # Delete the collection — ORM cascade removes CollectionDocument memberships.
+    # Documents themselves and their own summaries/chats/quizzes are NOT touched.
+    repo.delete(col)
 
 
 @router.post(

@@ -34,6 +34,10 @@ class CollectionRepository:
         self._db.refresh(col)
         return col
 
+    @property
+    def db(self) -> Session:
+        return self._db
+
     def delete(self, col: Collection) -> None:
         self._db.delete(col)
         self._db.commit()
