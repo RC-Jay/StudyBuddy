@@ -17,6 +17,11 @@ class DocumentOut(BaseModel):
     doc_type: str | None
     expected_summary_count: int | None
     toc: list | None
+    # Video-specific fields (None for documents)
+    source_url: str | None
+    video_source: str | None   # "youtube" | "ted" | … — set at submission time
+    duration_seconds: int | None
+    thumbnail_url: str | None
     created_at: str
 
     @classmethod
@@ -33,6 +38,10 @@ class DocumentOut(BaseModel):
             doc_type=doc.doc_type,
             expected_summary_count=doc.expected_summary_count,
             toc=doc.toc,
+            source_url=getattr(doc, "source_url", None),
+            video_source=getattr(doc, "video_source", None),
+            duration_seconds=getattr(doc, "duration_seconds", None),
+            thumbnail_url=getattr(doc, "thumbnail_url", None),
             created_at=doc.created_at.isoformat(),
         )
 

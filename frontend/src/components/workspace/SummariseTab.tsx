@@ -8,7 +8,7 @@ import type { Summary, TocItem } from "@/lib/types"
 interface Props {
   scopeType: "document" | "collection"
   scopeId: string
-  docType?: "book" | "research_paper"
+  docType?: "book" | "research_paper" | "video"
   isSummarising?: boolean
   expectedTotal?: number
   toc?: TocItem[] | null
@@ -493,13 +493,17 @@ export function SummariseTab({ scopeType, scopeId, docType, isSummarising, expec
     )
   }
 
+  // Videos use chapter-level summaries just like books (segment per chapter/section).
+  // Research papers use a single full + concepts summary.
   const effectiveDocType =
     docType ??
     (summaries.some((s) => s.granularity === "chapter") ? "book" : "research_paper")
 
+  const useBookLayout = effectiveDocType === "book" || effectiveDocType === "video"
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      {effectiveDocType === "book" ? (
+      {useBookLayout ? (
         <BookLayout summaries={summaries} toc={toc} isSummarising={isSummarising} expectedTotal={expectedTotal} />
       ) : (
         <PaperLayout summaries={summaries} isSummarising={isSummarising} expectedTotal={expectedTotal} />

@@ -68,6 +68,7 @@ Tests use `studybuddy_test` — override via `TEST_DATABASE_URL` env var. Each t
 | Vector store | LangChain `VectorStore` | `get_vectorstore()` + `get_vectorstore_dep()` DI wrapper | `MagicMock` + `dependency_overrides` |
 | File storage | `BaseStorageBackend` (`services/storage.py`) | `get_storage_backend()` | real filesystem (`tmp_path`) |
 | Document loaders | `BaseDocumentLoader` (`services/document_loader.py`) | `get_loader(ext)` / `register_loader()` | `DebugPDFLoader`, `DebugDocxLoader` |
+| Video loaders | `BaseVideoLoader` (`services/video/base.py`) | `get_video_loader(url)` / `register_video_loader()` | `MockLoader` subclass |
 
 LLM/storage/vectorstore factories use `@lru_cache(maxsize=1)` — process-level singletons. OAuth and document loaders use a module-level `_REGISTRY` dict (no cache) so entries can be swapped at test time via `register_*()`.
 
@@ -85,6 +86,19 @@ LLM/storage/vectorstore factories use `@lru_cache(maxsize=1)` — process-level 
 2. Background task: load bytes → `get_loader(file_type).load()` → `RecursiveCharacterTextSplitter` (512 tokens, 64 overlap, tiktoken `cl100k_base`) → `PGVector.add_documents()` → set status `ready`
 3. Query: `rag.retrieve(db, query, scope_type, scope_id, vectorstore=...)` fetches top-k chunks via cosine similarity; for collection scope it first resolves document IDs from `CollectionDocument`
 4. Chunks → `build_context()` for LLM prompt, `build_citations()` for response metadata
+
+**Video pipeline (POST /videos → query):**
+1. Submit URL → validate loader exists → create `Document` row (`file_type="video"`, `source_url=url`)
+2. Background: `get_video_loader(url).load(url)` → `VideoContent` (transcript + chapters + metadata)
+3. `classify_video(transcript, provider)` — rejects non-academic content
+4. `_content_to_documents()` → one LCDocument per chapter (or full transcript)
+5. Same `RecursiveCharacterTextSplitter` + PGVector embedding as documents
+6. `summarise_video()`: creator chapters → LLM segments (≤20min) → fixed windows (>20min); always generates CONCEPTS summary too
+7. `doc.toc` stored immediately as flat chapter list; frontend renders Video Outline the same way as Book Outline
+
+**Adding a new video source:**
+1. Create a `BaseVideoLoader` subclass in `services/video/`
+2. Call `register_video_loader(MyLoader())` — no other file changes needed
 
 **Key design notes:**
 - `rag.retrieve()` accepts an optional `vectorstore` keyword argument — always pass it from routers (injected via `get_vectorstore_dep`) so tests can override without touching the singleton

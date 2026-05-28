@@ -39,9 +39,14 @@ export interface Document {
   file_size_bytes: number
   processing_status: "pending" | "processing" | "summarising" | "ready" | "failed"
   processing_error: string | null
-  doc_type: "book" | "research_paper" | null
+  doc_type: "book" | "research_paper" | "video" | null
   expected_summary_count: number | null
   toc: TocItem[] | null
+  // Video-specific (null for documents)
+  source_url: string | null
+  video_source: string | null   // "youtube" | "ted" | null
+  duration_seconds: number | null
+  thumbnail_url: string | null
   created_at: string
 }
 

@@ -930,3 +930,200 @@ async def summarise_paper(
             _save_summary(db, doc, SummaryGranularity.CONCEPTS, concepts_text, sort_order=1)
         except Exception as exc:
             logger.error("Failed to generate paper concepts for %s: %s", doc.id, exc)
+
+
+# ─── Video summarisation ──────────────────────────────────────────────────────
+
+_VIDEO_SECTION_SYSTEM = """\
+You are an expert at analysing educational video transcripts. You will be given a
+transcript of an educational video. Your job is to identify 3–5 logical sections
+(like a table of contents for the video) based on topic transitions.
+
+Return ONLY a JSON object in this exact format:
+{
+  "sections": [
+    {"title": "Introduction and Motivation", "start_char": 0},
+    {"title": "Core Concepts", "start_char": 450},
+    {"title": "Practical Examples", "start_char": 1200},
+    {"title": "Summary and Key Takeaways", "start_char": 1900}
+  ]
+}
+
+Rules:
+- 3–5 sections only. Do not over-segment.
+- start_char is the approximate character offset in the transcript where the section begins.
+- The first section must always have start_char: 0.
+- Titles should be concise and descriptive (3–8 words).
+- Return ONLY the JSON — no extra text, no markdown fences.
+"""
+
+_VIDEO_SEGMENT_SUMMARY_SYSTEM = """\
+You are an expert summariser. Write a clear, concise summary of the provided
+video segment transcript. Focus on the key ideas, concepts, and explanations
+presented. Write in prose (2–4 paragraphs). Do not include headings.
+"""
+
+_VIDEO_CONCEPTS_SYSTEM = """\
+You are an expert at extracting key concepts from educational video transcripts.
+From the provided transcript, extract the most important concepts, terms,
+and ideas. Format your response as a numbered list where each item is:
+  <concept name>: <one-sentence explanation>
+Include 6–12 concepts.
+"""
+
+_SHORT_VIDEO_THRESHOLD = 1200   # 20 minutes — use LLM segmentation below this
+_FIXED_WINDOW_CHARS = 3000      # ~5 min equivalent at average speech rate
+
+
+async def _llm_segment_transcript(
+    transcript: str,
+    provider: BaseChatProvider,
+) -> list[tuple[str, str]]:
+    """
+    Use the LLM to detect 3–5 logical sections in the transcript.
+    Returns list of (title, segment_text) pairs.
+    Falls back to a two-part split on parse error.
+    """
+    sample = transcript[:12000]  # send a representative sample
+    try:
+        response = await _complete_with_retry(
+            provider,
+            [
+                {"role": "system", "content": _VIDEO_SECTION_SYSTEM},
+                {"role": "user", "content": sample},
+            ],
+            temperature=0.2,
+        )
+        import json as _json
+        data = _json.loads(response.strip())
+        sections = data.get("sections", [])
+        if not sections or len(sections) < 2:
+            raise ValueError("Too few sections returned")
+
+        # Build (title, text) pairs using char offsets
+        result = []
+        total = len(transcript)
+        for i, sec in enumerate(sections):
+            start = int(sec.get("start_char", 0))
+            end = int(sections[i + 1]["start_char"]) if i + 1 < len(sections) else total
+            text = transcript[start:end].strip()
+            if text:
+                result.append((sec["title"], text))
+        return result
+    except Exception as exc:
+        logger.warning("LLM segmentation failed: %s — using half split", exc)
+        mid = len(transcript) // 2
+        return [
+            ("First Half", transcript[:mid]),
+            ("Second Half", transcript[mid:]),
+        ]
+
+
+def _fixed_window_segments(transcript: str) -> list[tuple[str, str]]:
+    """Divide a long transcript into fixed-size windows."""
+    segments = []
+    total = len(transcript)
+    i = 0
+    part = 1
+    while i < total:
+        text = transcript[i : i + _FIXED_WINDOW_CHARS].strip()
+        if text:
+            segments.append((f"Part {part}", text))
+            part += 1
+        i += _FIXED_WINDOW_CHARS
+    return segments
+
+
+async def summarise_video(
+    doc: Document,
+    content,  # VideoContent dataclass
+    db: Session,
+    provider: BaseChatProvider,
+    vectorstore: VectorStore,
+    done_hints: set[str] | None = None,
+) -> None:
+    """
+    Generate summaries for a video.
+
+    Segmentation strategy:
+      1. Creator-defined chapters  — use directly (YouTube chapters from description)
+      2. No chapters, short video (≤20 min) — LLM detects 3–5 logical sections
+      3. No chapters, long video (>20 min)  — fixed 5-min character windows
+
+    Always generates:
+      - One CHAPTER summary per segment (section_hint = segment title)
+      - One CONCEPTS summary for the full transcript
+
+    done_hints: section_hints already stored — skipped on resume.
+    """
+    from app.services.video.base import VideoContent as VC  # avoid circular import
+
+    skip = done_hints or set()
+    transcript = content.transcript
+    duration = content.duration_seconds or 0
+
+    logger.info("Starting video summarisation for %s (%s)", doc.id, doc.title)
+
+    # ── Determine segments ────────────────────────────────────────────────────
+    if content.chapters:
+        segments = [(ch.title, ch.transcript) for ch in content.chapters if ch.transcript.strip()]
+        logger.info("Using %d creator-defined chapters", len(segments))
+    elif duration <= _SHORT_VIDEO_THRESHOLD:
+        segments = await _llm_segment_transcript(transcript, provider)
+        logger.info("LLM segmented into %d sections", len(segments))
+    else:
+        segments = _fixed_window_segments(transcript)
+        logger.info("Fixed-window segmented into %d parts", len(segments))
+
+    # ── Persist TOC so frontend can render outline immediately ────────────────
+    toc_items = [
+        {"type": "chapter", "title": title, "sections": []}
+        for title, _ in segments
+    ]
+    doc.toc = toc_items
+    doc.expected_summary_count = len(segments) + 1  # +1 for concepts
+    db.commit()
+
+    # ── Summarise each segment ────────────────────────────────────────────────
+    for idx, (title, text) in enumerate(segments):
+        if _is_deleted(doc, db):
+            logger.info("Document %s was deleted — stopping summarisation", doc.id)
+            return
+        if title in skip:
+            continue
+        try:
+            if len(text) > 15000:
+                text = text[:15000]
+            summary_text = await _complete_with_retry(
+                provider,
+                [
+                    {"role": "system", "content": _VIDEO_SEGMENT_SUMMARY_SYSTEM},
+                    {"role": "user", "content": f"Section: {title}\n\n{text}"},
+                ],
+                temperature=0.3,
+            )
+            _save_summary(db, doc, SummaryGranularity.CHAPTER, summary_text, title, sort_order=idx)
+        except Exception as exc:
+            logger.warning("Failed to summarise video segment '%s': %s", title, exc)
+
+    # ── Key concepts from the full transcript ────────────────────────────────
+    if SummaryGranularity.CONCEPTS.value not in skip:
+        if _is_deleted(doc, db):
+            logger.info("Document %s was deleted — stopping summarisation", doc.id)
+            return
+        try:
+            full_sample = transcript[:20000]
+            concepts_text = await _complete_with_retry(
+                provider,
+                [
+                    {"role": "system", "content": _VIDEO_CONCEPTS_SYSTEM},
+                    {"role": "user", "content": full_sample},
+                ],
+                temperature=0.3,
+            )
+            _save_summary(
+                db, doc, SummaryGranularity.CONCEPTS, concepts_text,
+                section_hint=None, sort_order=len(segments),
+            )
+        except Exception as exc:
+            logger.error("Failed to generate video concepts for %s: %s", doc.id, exc)

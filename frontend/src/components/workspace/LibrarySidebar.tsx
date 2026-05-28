@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react"
 import Image from "next/image"
-import { Upload, Trash2, FileText, Loader2, Plus, FolderOpen, LogOut, ChevronDown, ChevronUp, AlertCircle, FolderPlus, Check, Pencil } from "lucide-react"
+import { Upload, Trash2, FileText, Loader2, Plus, FolderOpen, LogOut, ChevronDown, ChevronUp, AlertCircle, FolderPlus, Check, Pencil, Video, Link, ExternalLink } from "lucide-react"
 import api from "@/lib/api"
 import { useAuthStore } from "@/lib/store"
 import { logout } from "@/lib/auth"
@@ -77,6 +77,226 @@ function CollectionPicker({ doc, collections, onToggle, onClose, anchorRect }: C
   )
 }
 
+// ─── Source badge ─────────────────────────────────────────────────────────────
+
+const SOURCE_STYLES: Record<string, { label: string; className: string }> = {
+  youtube: { label: "YouTube", className: "bg-red-50 text-red-600" },
+  ted:     { label: "TED",     className: "bg-rose-50 text-rose-700" },
+}
+
+function SourceBadge({ source, url }: { source: string; url: string | null }) {
+  const style = SOURCE_STYLES[source] ?? { label: source, className: "bg-gray-100 text-gray-500" }
+  return (
+    <span className={`inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium ${style.className}`}>
+      {style.label}
+      {url && (
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="opacity-60 hover:opacity-100"
+          title={`Open on ${style.label}`}
+        >
+          <ExternalLink className="h-2.5 w-2.5" />
+        </a>
+      )}
+    </span>
+  )
+}
+
+// ─── Shared row props ─────────────────────────────────────────────────────────
+
+interface DocRowProps {
+  doc: Document
+  isSelected: boolean
+  isRenaming: boolean
+  renameValue: string
+  onSelect: () => void
+  onRenameChange: (v: string) => void
+  onRenameCommit: () => void
+  onRenameCancel: () => void
+  onRenameStart: (e: React.MouseEvent) => void
+  onOpenPicker: (e: React.MouseEvent) => void
+  onDelete: (e: React.MouseEvent) => void
+}
+
+function DocRow({
+  doc, isSelected, isRenaming, renameValue,
+  onSelect, onRenameChange, onRenameCommit, onRenameCancel,
+  onRenameStart, onOpenPicker, onDelete,
+}: DocRowProps) {
+  const isReady = doc.processing_status === "ready" || doc.processing_status === "summarising"
+  return (
+    <div
+      onClick={() => !isRenaming && onSelect()}
+      className={`group flex w-full items-center gap-2.5 px-4 py-2 text-sm transition-colors ${
+        isRenaming ? "cursor-default" : isReady ? "cursor-pointer" : "cursor-default"
+      } ${
+        isSelected
+          ? "bg-indigo-50 text-indigo-700"
+          : isReady
+          ? "text-gray-700 hover:bg-gray-50"
+          : "text-gray-400"
+      }`}
+    >
+      <DocStatusIndicator status={doc.processing_status} />
+      {isRenaming ? (
+        <input
+          autoFocus
+          type="text"
+          value={renameValue}
+          onChange={(e) => onRenameChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onRenameCommit()
+            if (e.key === "Escape") onRenameCancel()
+          }}
+          onBlur={onRenameCommit}
+          onClick={(e) => e.stopPropagation()}
+          className="flex-1 min-w-0 rounded border border-indigo-400 bg-white px-1.5 py-0.5 text-xs text-gray-800 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+        />
+      ) : (
+        <span className="flex-1 truncate">{doc.title}</span>
+      )}
+      {!isRenaming && doc.processing_status === "failed" && (
+        <span
+          title={doc.processing_error ?? undefined}
+          className="shrink-0 cursor-help rounded bg-red-50 px-1 py-0.5 text-xs text-red-500"
+        >
+          failed
+        </span>
+      )}
+      {!isRenaming && isReady && (
+        <span role="button" onClick={onRenameStart} title="Rename"
+          className="hidden shrink-0 rounded p-0.5 text-gray-300 hover:text-gray-600 group-hover:block">
+          <Pencil className="h-3 w-3" />
+        </span>
+      )}
+      {!isRenaming && isReady && (
+        <span role="button" onClick={onOpenPicker} title="Add to collection"
+          className="hidden shrink-0 rounded p-0.5 text-gray-300 hover:text-indigo-500 group-hover:block">
+          <FolderPlus className="h-3 w-3" />
+        </span>
+      )}
+      {!isRenaming && (
+        <span role="button" onClick={onDelete}
+          className="hidden shrink-0 rounded p-0.5 text-gray-300 hover:text-red-500 group-hover:block">
+          <Trash2 className="h-3 w-3" />
+        </span>
+      )}
+    </div>
+  )
+}
+
+function VideoRow({
+  doc, isSelected, isRenaming, renameValue,
+  onSelect, onRenameChange, onRenameCommit, onRenameCancel,
+  onRenameStart, onOpenPicker, onDelete,
+}: DocRowProps) {
+  const isReady = doc.processing_status === "ready" || doc.processing_status === "summarising"
+  return (
+    <div
+      onClick={() => !isRenaming && onSelect()}
+      className={`group flex w-full items-start gap-2.5 px-4 py-2 text-sm transition-colors ${
+        isRenaming ? "cursor-default" : isReady ? "cursor-pointer" : "cursor-default"
+      } ${
+        isSelected
+          ? "bg-indigo-50 text-indigo-700"
+          : isReady
+          ? "text-gray-700 hover:bg-gray-50"
+          : "text-gray-400"
+      }`}
+    >
+      {/* Thumbnail or placeholder */}
+      <div className="shrink-0 mt-0.5">
+        {doc.thumbnail_url ? (
+          <Image
+            src={doc.thumbnail_url}
+            alt=""
+            width={40}
+            height={28}
+            className="rounded object-cover"
+            unoptimized
+          />
+        ) : (
+          <div className="flex h-7 w-10 items-center justify-center rounded bg-gray-100">
+            <DocStatusIndicator status={doc.processing_status} />
+          </div>
+        )}
+      </div>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        {isRenaming ? (
+          <input
+            autoFocus
+            type="text"
+            value={renameValue}
+            onChange={(e) => onRenameChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onRenameCommit()
+              if (e.key === "Escape") onRenameCancel()
+            }}
+            onBlur={onRenameCommit}
+            onClick={(e) => e.stopPropagation()}
+            className="flex-1 min-w-0 rounded border border-indigo-400 bg-white px-1.5 py-0.5 text-xs text-gray-800 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+          />
+        ) : (
+          <span className="truncate text-xs leading-tight">{doc.title}</span>
+        )}
+        {!isRenaming && (
+          <div className="flex items-center gap-1.5 mt-0.5">
+            {doc.video_source && (
+              <SourceBadge source={doc.video_source} url={doc.source_url} />
+            )}
+            {doc.duration_seconds ? (
+              <span className="text-[10px] text-gray-400">{formatDuration(doc.duration_seconds)}</span>
+            ) : doc.processing_status !== "failed" && (
+              <DocStatusIndicator status={doc.processing_status} />
+            )}
+            {doc.processing_status === "failed" && (
+              <span title={doc.processing_error ?? undefined}
+                className="cursor-help text-[10px] text-red-500">
+                failed
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Actions */}
+      <div className="flex shrink-0 items-center gap-0.5 mt-0.5">
+        {!isRenaming && isReady && (
+          <span role="button" onClick={onRenameStart} title="Rename"
+            className="hidden rounded p-0.5 text-gray-300 hover:text-gray-600 group-hover:block">
+            <Pencil className="h-3 w-3" />
+          </span>
+        )}
+        {!isRenaming && isReady && (
+          <span role="button" onClick={onOpenPicker} title="Add to collection"
+            className="hidden rounded p-0.5 text-gray-300 hover:text-indigo-500 group-hover:block">
+            <FolderPlus className="h-3 w-3" />
+          </span>
+        )}
+        {!isRenaming && (
+          <span role="button" onClick={onDelete}
+            className="hidden rounded p-0.5 text-gray-300 hover:text-red-500 group-hover:block">
+            <Trash2 className="h-3 w-3" />
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function formatDuration(seconds: number): string {
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = seconds % 60
+  if (h > 0) return `${h}h ${m}m`
+  if (m > 0) return `${m}m ${s.toString().padStart(2, "0")}s`
+  return `${s}s`
+}
+
 export function LibrarySidebar() {
   const { user, scope, setScope } = useAuthStore()
   const setUser = useAuthStore((s) => s.setUser)
@@ -88,6 +308,7 @@ export function LibrarySidebar() {
   const [creatingCollection, setCreatingCollection] = useState(false)
   const [newCollectionName, setNewCollectionName] = useState("")
   const [docsExpanded, setDocsExpanded] = useState(true)
+  const [videosExpanded, setVideosExpanded] = useState(true)
   const [collectionsExpanded, setCollectionsExpanded] = useState(true)
   const [pickerDocId, setPickerDocId] = useState<string | null>(null)
   const [pickerAnchorRect, setPickerAnchorRect] = useState<DOMRect | null>(null)
@@ -95,7 +316,15 @@ export function LibrarySidebar() {
   const [renameValue, setRenameValue] = useState("")
   const [renamingCollId, setRenamingCollId] = useState<string | null>(null)
   const [renameCollValue, setRenameCollValue] = useState("")
+  const [addingVideo, setAddingVideo] = useState(false)
+  const [videoUrl, setVideoUrl] = useState("")
+  const [submittingVideo, setSubmittingVideo] = useState(false)
+  const [videoError, setVideoError] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // Separate documents from videos
+  const fileDocs = docs.filter((d) => d.file_type !== "video")
+  const videoDocs = docs.filter((d) => d.file_type === "video")
 
   const fetchDocs = useCallback(() => {
     api.get<Document[]>("/documents").then(({ data }) => {
@@ -103,8 +332,20 @@ export function LibrarySidebar() {
       const currentScope = useAuthStore.getState().scope
       if (currentScope?.type === "document") {
         const updated = data.find((d) => d.id === currentScope.id)
-        if (updated && (updated.processing_status !== currentScope.status || updated.expected_summary_count !== currentScope.expected_summary_count || updated.toc !== currentScope.toc)) {
-          setScope({ ...currentScope, status: updated.processing_status, expected_summary_count: updated.expected_summary_count ?? undefined, toc: updated.toc })
+        if (
+          updated &&
+          (updated.processing_status !== currentScope.status ||
+            updated.expected_summary_count !== currentScope.expected_summary_count ||
+            updated.toc !== currentScope.toc ||
+            updated.thumbnail_url !== currentScope.thumbnail_url)
+        ) {
+          setScope({
+            ...currentScope,
+            status: updated.processing_status,
+            expected_summary_count: updated.expected_summary_count ?? undefined,
+            toc: updated.toc,
+            thumbnail_url: updated.thumbnail_url,
+          })
         }
       }
     })
@@ -137,7 +378,28 @@ export function LibrarySidebar() {
       doc_type: doc.doc_type ?? undefined,
       expected_summary_count: doc.expected_summary_count ?? undefined,
       toc: doc.toc,
+      thumbnail_url: doc.thumbnail_url,
     })
+  }
+
+  async function handleSubmitVideo() {
+    const url = videoUrl.trim()
+    if (!url) return
+    setSubmittingVideo(true)
+    setVideoError(null)
+    try {
+      const { data } = await api.post<Document>("/videos", { url })
+      setDocs((prev) => [data, ...prev])
+      setVideoUrl("")
+      setAddingVideo(false)
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
+        "Failed to add video. Check the URL and try again."
+      setVideoError(message)
+    } finally {
+      setSubmittingVideo(false)
+    }
   }
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -280,84 +542,23 @@ export function LibrarySidebar() {
 
           {docsExpanded && (
             <div>
-              {docs.map((doc) => {
-                const isReady = doc.processing_status === "ready" || doc.processing_status === "summarising"
-                const isSelected = scope?.id === doc.id
-                const isRenaming = renamingDocId === doc.id
-                return (
-                  <div
-                    key={doc.id}
-                    onClick={() => !isRenaming && selectDoc(doc)}
-                    className={`group flex w-full items-center gap-2.5 px-4 py-2 text-sm transition-colors ${
-                      isRenaming ? "cursor-default" : isReady ? "cursor-pointer" : "cursor-default"
-                    } ${
-                      isSelected
-                        ? "bg-indigo-50 text-indigo-700"
-                        : isReady
-                        ? "text-gray-700 hover:bg-gray-50"
-                        : "text-gray-400"
-                    }`}
-                  >
-                    <DocStatusIndicator status={doc.processing_status} />
-                    {isRenaming ? (
-                      <input
-                        autoFocus
-                        type="text"
-                        value={renameValue}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") commitRename(doc)
-                          if (e.key === "Escape") cancelRename()
-                        }}
-                        onBlur={() => commitRename(doc)}
-                        onClick={(e) => e.stopPropagation()}
-                        className="flex-1 min-w-0 rounded border border-indigo-400 bg-white px-1.5 py-0.5 text-xs text-gray-800 focus:outline-none focus:ring-1 focus:ring-indigo-400"
-                      />
-                    ) : (
-                      <span className="flex-1 truncate">{doc.title}</span>
-                    )}
-                    {!isRenaming && doc.processing_status === "failed" && (
-                      <span
-                        title={doc.processing_error ?? undefined}
-                        className="shrink-0 cursor-help rounded bg-red-50 px-1 py-0.5 text-xs text-red-500"
-                      >
-                        failed
-                      </span>
-                    )}
-                    {/* Action buttons — visible on row hover */}
-                    {!isRenaming && isReady && (
-                      <span
-                        role="button"
-                        onClick={(e) => startRename(doc, e)}
-                        title="Rename"
-                        className="hidden shrink-0 rounded p-0.5 text-gray-300 hover:text-gray-600 group-hover:block"
-                      >
-                        <Pencil className="h-3 w-3" />
-                      </span>
-                    )}
-                    {!isRenaming && isReady && (
-                      <span
-                        role="button"
-                        onClick={(e) => openPicker(doc, e)}
-                        title="Add to collection"
-                        className="hidden shrink-0 rounded p-0.5 text-gray-300 hover:text-indigo-500 group-hover:block"
-                      >
-                        <FolderPlus className="h-3 w-3" />
-                      </span>
-                    )}
-                    {!isRenaming && (
-                      <span
-                        role="button"
-                        onClick={(e) => handleDeleteDoc(doc.id, e)}
-                        className="hidden shrink-0 rounded p-0.5 text-gray-300 hover:text-red-500 group-hover:block"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </span>
-                    )}
-                  </div>
-                )
-              })}
-              {docs.length === 0 && (
+              {fileDocs.map((doc) => (
+                <DocRow
+                  key={doc.id}
+                  doc={doc}
+                  isSelected={scope?.id === doc.id}
+                  isRenaming={renamingDocId === doc.id}
+                  renameValue={renameValue}
+                  onSelect={() => selectDoc(doc)}
+                  onRenameChange={setRenameValue}
+                  onRenameCommit={() => commitRename(doc)}
+                  onRenameCancel={cancelRename}
+                  onRenameStart={(e) => startRename(doc, e)}
+                  onOpenPicker={(e) => openPicker(doc, e)}
+                  onDelete={(e) => handleDeleteDoc(doc.id, e)}
+                />
+              ))}
+              {fileDocs.length === 0 && (
                 <p className="px-4 py-2 text-xs text-gray-400">No documents yet</p>
               )}
               <div className="px-4 py-2">
@@ -381,6 +582,84 @@ export function LibrarySidebar() {
                   />
                 </label>
               </div>
+            </div>
+          )}
+        </div>
+
+        {/* Videos */}
+        <div className="mt-1">
+          <button
+            onClick={() => setVideosExpanded((v) => !v)}
+            className="flex w-full items-center justify-between px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-gray-400 hover:text-gray-600"
+          >
+            <span className="flex items-center gap-2">
+              <Video className="h-3.5 w-3.5" />
+              Videos
+            </span>
+            {videosExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          </button>
+
+          {videosExpanded && (
+            <div>
+              {videoDocs.map((doc) => (
+                <VideoRow
+                  key={doc.id}
+                  doc={doc}
+                  isSelected={scope?.id === doc.id}
+                  isRenaming={renamingDocId === doc.id}
+                  renameValue={renameValue}
+                  onSelect={() => selectDoc(doc)}
+                  onRenameChange={setRenameValue}
+                  onRenameCommit={() => commitRename(doc)}
+                  onRenameCancel={cancelRename}
+                  onRenameStart={(e) => startRename(doc, e)}
+                  onOpenPicker={(e) => openPicker(doc, e)}
+                  onDelete={(e) => handleDeleteDoc(doc.id, e)}
+                />
+              ))}
+              {videoDocs.length === 0 && !addingVideo && (
+                <p className="px-4 py-2 text-xs text-gray-400">No videos yet</p>
+              )}
+
+              {addingVideo ? (
+                <div className="px-4 py-2 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      autoFocus
+                      type="url"
+                      value={videoUrl}
+                      onChange={(e) => { setVideoUrl(e.target.value); setVideoError(null) }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleSubmitVideo()
+                        if (e.key === "Escape") { setAddingVideo(false); setVideoUrl(""); setVideoError(null) }
+                      }}
+                      placeholder="YouTube or TED URL…"
+                      className="flex-1 min-w-0 rounded border border-gray-300 px-2 py-1 text-xs focus:border-indigo-400 focus:outline-none"
+                      disabled={submittingVideo}
+                    />
+                    <button
+                      onClick={handleSubmitVideo}
+                      disabled={submittingVideo || !videoUrl.trim()}
+                      className="rounded bg-indigo-600 px-2 py-1 text-xs text-white hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-1"
+                    >
+                      {submittingVideo ? <Loader2 className="h-3 w-3 animate-spin" /> : "Add"}
+                    </button>
+                  </div>
+                  {videoError && (
+                    <p className="text-xs text-red-500">{videoError}</p>
+                  )}
+                </div>
+              ) : (
+                <div className="px-4 py-2">
+                  <button
+                    onClick={() => setAddingVideo(true)}
+                    className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-indigo-600"
+                  >
+                    <Link className="h-3 w-3" />
+                    Add video URL
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>

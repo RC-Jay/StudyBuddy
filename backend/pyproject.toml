@@ -29,6 +29,8 @@ dependencies = [
     "pydantic-settings>=2.7.0",
     "python-dotenv>=1.0.0",
     "aiofiles>=24.1.0",
+    "youtube-transcript-api>=1.0.0",
+    "yt-dlp>=2024.1.0",
 ]
 
 [project.optional-dependencies]

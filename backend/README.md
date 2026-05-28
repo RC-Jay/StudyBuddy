@@ -16,6 +16,7 @@ FastAPI backend for StudyBuddy, an AI-powered study assistant for college studen
 | LLM | Azure OpenAI GPT-4o-mini (swappable via `LLM_PROVIDER`) |
 | Embeddings | Azure OpenAI text-embedding-3-large, 3072-dim (swappable) |
 | Document ingestion | LangChain (pymupdf4llm for PDF, Docx2txtLoader for DOCX) |
+| Video ingestion | youtube-transcript-api (transcripts), yt-dlp (metadata), httpx (TED scraping) |
 | Vector store | LangChain PGVector — langchain-postgres (swappable) |
 | File storage | Local filesystem (dev) — swap to Azure Blob via env var |
 | Auth | Google / LinkedIn OAuth → StudyBuddy-issued JWT sessions |
@@ -67,6 +68,7 @@ backend/
 │   ├── routers/             # HTTP layer — thin: validate input, call repo/service, return schema
 │   │   ├── auth.py
 │   │   ├── documents.py
+│   │   ├── videos.py
 │   │   ├── collections.py
 │   │   ├── chat.py
 │   │   ├── quiz.py
@@ -80,9 +82,19 @@ backend/
 │   │   ├── llm/                   # Chat provider abstraction (Strategy Pattern)
 │   │   │   ├── base.py            #   BaseChatProvider — abstract interface
 │   │   │   └── azure_openai.py    #   AzureOpenAIChatProvider — concrete impl
+│   │   ├── video/                 # Video loader abstraction (Strategy Pattern)
+│   │   │   ├── base.py            #   VideoContent, VideoChapter, BaseVideoLoader
+│   │   │   ├── youtube.py         #   YouTubeLoader — transcript API + oEmbed + yt-dlp
+│   │   │   ├── ted.py             #   TEDLoader — scrapes __NEXT_DATA__ from ted.com
+│   │   │   ├── registry.py        #   get_video_loader(url), register_video_loader()
+│   │   │   └── __init__.py
 │   │   ├── auth.py                # JWT + refresh token management, upsert_user
+│   │   ├── auto_summariser.py     # summarise_book, summarise_paper, summarise_video
+│   │   ├── document_classifier.py # LLM: classify doc as book/research_paper; reject non-academic
 │   │   ├── document_loader.py     # Strategy pattern: file-type loaders (PDF, DOCX, extensible)
-│   │   ├── document_processor.py  # Ingestion pipeline — file-type-agnostic orchestrator
+│   │   ├── document_processor.py  # Document ingestion pipeline orchestrator
+│   │   ├── video_classifier.py    # LLM: classify video as academic; reject entertainment/news
+│   │   ├── video_processor.py     # Video ingestion pipeline orchestrator
 │   │   ├── langchain_setup.py     # Embeddings + vector store singletons (LangChain base types)
 │   │   ├── rag.py                 # pgvector retrieval, context + citation building
 │   │   ├── quiz_engine.py         # Question bank, generation, short-answer eval
@@ -107,6 +119,7 @@ Four concerns are deliberately kept behind stable interfaces so any implementati
 | **Chat LLM** | `BaseChatProvider` (`services/llm/base.py`) | `AzureOpenAIChatProvider` | Subclass `BaseChatProvider`, add `elif` in `services/llm/__init__.py`, set `LLM_PROVIDER=<key>` |
 | **File storage** | `BaseStorageBackend` (`services/storage.py`) | Local / Azure Blob | Subclass `BaseStorageBackend`, add `elif` in `get_storage_backend()`, set `STORAGE_BACKEND=<key>` |
 | **Document loaders** | `BaseDocumentLoader` (`services/document_loader.py`) | PDF, DOCX | `register_loader("ext", MyLoader())` |
+| **Video loaders** | `BaseVideoLoader` (`services/video/base.py`) | YouTube, TED | `register_video_loader(MyLoader())` — checked in registration order via `can_handle(url)` |
 | **Embeddings** | LangChain `Embeddings` | `AzureOpenAIEmbeddings` | Replace return value in `langchain_setup.get_embeddings()` |
 | **Vector store** | LangChain `VectorStore` | `PGVector` | Replace return value in `langchain_setup.get_vectorstore()` |
 
@@ -235,7 +248,37 @@ Create a class in `services/oauth/` that subclasses `BaseOAuthProvider` and impl
 
 **Adding a new file type** (e.g. `.txt`, `.pptx`): subclass `BaseDocumentLoader` in `document_loader.py` and call `register_loader("ext", MyLoader())`. No changes needed in `document_processor.py`.
 
-Poll `/status` to know when a document is ready to query.
+Poll `/documents/{id}/status` to know when a document is ready to query.
+
+---
+
+### Videos — `/videos`
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/videos` | Submit a video URL for ingestion. Processing starts immediately in the background. Returns `202 Accepted`. |
+
+Video resources are stored as `Document` rows (`file_type="video"`) and appear in `GET /documents` alongside uploaded files. All downstream endpoints (chat, quiz, summaries) work the same way — scope by the returned document ID.
+
+**Supported sources:**
+- **YouTube** (`youtube.com/watch?v=...`, `youtu.be/...`) — transcript fetched via the YouTube Transcript API (no API key required); metadata via oEmbed + yt-dlp; creator-defined chapters parsed from the video description
+- **TED** (`ted.com/talks/...`) — transcript and metadata scraped from the talk page's embedded `__NEXT_DATA__` JSON (no API key required)
+
+**Request body:**
+```json
+{ "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ" }
+```
+
+**Video ingestion pipeline (runs as a background task):**
+1. `get_video_loader(url)` resolves the right loader strategy (TED checked before YouTube)
+2. Loader fetches transcript + metadata — no video file is downloaded
+3. LLM classifies the transcript as academic/educational; rejects entertainment, news, vlogs, etc.
+4. Transcript is segmented: creator chapters → LLM detection (≤20 min) → fixed windows (>20 min)
+5. Transcript segments become LangChain `Document` objects and are chunked + embedded like text documents
+6. `summarise_video()` generates one summary per segment plus a key-concepts summary
+7. `doc.toc` is stored as a flat chapter list so the frontend can show the Video Outline immediately
+
+**Adding a new video source:** subclass `BaseVideoLoader` in `services/video/`, implement `can_handle(url)` and `load(url) → VideoContent`, then call `register_video_loader(MyLoader())`. No other files need changing.
 
 ---
 

@@ -6,10 +6,14 @@ An AI-powered study assistant for college students. Upload your textbooks, resea
 
 ## What it does
 
-**Supported document types**  
-Only academic/technical books and research papers are accepted. On upload, an LLM classifies the document across two dimensions — structural type (book vs. research paper) and academic relevance. Rejected documents receive a specific error message explaining why:
-- *Wrong type* — invoices, slide decks, forms, manuals, etc.
+**Supported content types**  
+Only academic/technical material is accepted. An LLM classifies each submission on upload. Rejected content receives a specific error message explaining why:
+- *Wrong document type* — invoices, slide decks, forms, manuals, etc.
 - *Non-academic book* — fiction, biographies, self-help, comics, cookbooks, and other general-interest books that wouldn't be used as course material.
+- *Non-academic video* — entertainment, news, vlogs, and other content not tied to an academic discipline.
+
+Accepted document types: textbooks, technical references, academic monographs, research papers, journal articles, theses, dissertations.  
+Accepted video sources: **YouTube** and **TED** talks. Submit by URL — no file upload required. The system is designed to add new sources (Vimeo, direct video files, Coursera) by registering one new loader class with no other code changes.
 
 **Chat with your documents**  
 Ask questions about your uploaded material and get answers grounded strictly in the source text, with citations back to the exact document and page number.
@@ -18,6 +22,7 @@ Ask questions about your uploaded material and get answers grounded strictly in 
 Summaries are generated automatically during document processing — no manual trigger needed.
 - *Books* — the pipeline extracts the table of contents using PyMuPDF font-size and coordinate analysis (no LLM required), falling back to an LLM parse, then a regex heading scan, then an equal-split as last resort. The extracted TOC is stored against the document and immediately rendered as a **Book Outline** in the Summaries tab — showing the full Part → Chapter → Section hierarchy before any summaries are generated. Summaries are then generated section by section and appear progressively as each one completes.
 - *Research papers* — generates a full prose summary and a numbered key-concepts list.
+- *Videos* — segments the transcript into logical sections (using creator-defined chapters if available, LLM detection for short videos ≤20 min, or fixed time windows for longer ones), then summarises each segment. A key-concepts list is also generated for the full transcript. The **Video Outline** appears in the Summaries tab with the same progressive overlay as books.
 
 **Quiz yourself**  
 Generate multiple choice, short answer, or true/false questions from your material. Questions are stored in a bank and reused across sessions. Difficulty levels map to Bloom's taxonomy — from recall all the way up to evaluation and synthesis.
@@ -39,9 +44,9 @@ The project is a monorepo with two packages:
 | `backend/` | Python · FastAPI · PostgreSQL + pgvector · Azure OpenAI |
 | `frontend/` | TypeScript · Next.js 16 · Tailwind CSS |
 
-**AI layer** — All AI workloads run through Azure OpenAI. GPT-4o-mini handles chat, quiz generation, short-answer evaluation, and summarisation. text-embedding-3-large (3072 dimensions) handles document embeddings for retrieval.
+**AI layer** — All AI workloads run through Azure OpenAI. GPT-4o-mini handles chat, quiz generation, short-answer evaluation, summarisation, and video classification. text-embedding-3-large (3072 dimensions) handles embeddings for both documents and video transcripts.
 
-**RAG pipeline** — Uploaded documents are classified, extracted, split into overlapping 512-token chunks (tiktoken cl100k_base), and embedded. At query time the most relevant chunks are retrieved from pgvector using cosine similarity and injected as source context into the LLM prompt. Embedding is rate-limit-aware: chunks are batched at ~200K tokens per batch with a 65-second pause between batches, and a process-level semaphore serialises concurrent uploads to stay within Azure's 250K tokens/minute cap.
+**RAG pipeline** — Documents and video transcripts are classified, extracted/fetched, split into overlapping 512-token chunks (tiktoken cl100k_base), and embedded. At query time the most relevant chunks are retrieved from pgvector using cosine similarity and injected as source context into the LLM prompt. Embedding is rate-limit-aware: chunks are batched at ~200K tokens per batch with a 65-second pause between batches, and a process-level semaphore serialises concurrent uploads to stay within Azure's 250K tokens/minute cap.
 
 **Processing pipeline** — Documents move through four statuses: `pending` → `processing` (text extraction + embedding) → `summarising` (auto-summary generation) → `ready`. The workspace unlocks for Chat and Quiz as soon as the `summarising` phase begins; summaries appear in the Summaries tab progressively as each chapter completes.
 

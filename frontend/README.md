@@ -79,7 +79,12 @@ After logging in, the entire app lives at `/library` — a two-column layout:
 │    Doc 2   ●    │  Tab content fills this area           │
 │    + Upload     │                                        │
 │  ─────────────  │  ────────────────────────────────────  │
-│  📁 Collections │  [ Ask anything about this doc... ] ▶  │
+│  🎬 Videos      │  [ Ask anything about this doc... ] ▶  │
+│  ┌──┐ Video 1   │                                        │
+│  └──┘ 12m 34s   │                                        │
+│    + Add URL    │                                        │
+│  ─────────────  │                                        │
+│  📁 Collections │                                        │
 │    Collection 1 │                                        │
 │    + New        │                                        │
 │  ─────────────  │                                        │
@@ -87,11 +92,19 @@ After logging in, the entire app lives at `/library` — a two-column layout:
 └─────────────────┴──────────────────────────────────────┘
 ```
 
-**Left sidebar** — lists all documents (with upload + delete) and collections (with create + delete). A coloured dot shows each document's processing status. Clicking any item opens it in the right panel.
+**Left sidebar** — three collapsible sections:
+- **Documents** — PDF/DOCX uploads with status indicator, rename, add-to-collection, delete
+- **Videos** — YouTube and TED talks submitted by URL; shows thumbnail, duration, and processing status; same collection/rename/delete actions as documents
+- **Collections** — named groups that can contain both documents and videos
 
-**Right panel — Chat tab** — conversational Q&A grounded in the selected document or collection, with SSE streaming and citation chips. Chat history for the current scope is accessible via a compact dropdown.
+Clicking any ready item sets the workspace scope; the right panel tabs update accordingly.
 
-**Right panel — Summarise tab** — generate a Full Summary, TLDR, Key Concepts list, or Section summary. Previously generated summaries for the scope are shown in a slim list.
+**Right panel — Chat tab** — conversational Q&A grounded in the selected document/video/collection, with SSE streaming and citation chips. Chat history for the current scope is accessible via a compact dropdown.
+
+**Right panel — Summarise tab** — auto-generated summaries displayed as an outline:
+- *Books* — full Part → Chapter → Section hierarchy; unsummarised nodes shown dimmed while generating
+- *Research papers* — full prose summary + key concepts list
+- *Videos* — Video Outline with one entry per segment (creator chapters or LLM-detected); same progressive overlay as books
 
 **Right panel — Quiz tab** — configure format (MCQ / Short Answer / True-False), difficulty, mode (Practice or timed Exam), and question count, then work through questions and see a scored debrief.
 
@@ -115,9 +128,9 @@ src/
 │   ├── auth/
 │   │   └── AuthProvider.tsx  # Rehydrates session from refresh cookie on mount
 │   └── workspace/
-│       ├── LibrarySidebar.tsx  # Left panel: documents, collections, upload, user info
+│       ├── LibrarySidebar.tsx  # Left panel: documents, videos (URL input), collections, user info
 │       ├── ChatTab.tsx         # Chat interface with SSE streaming
-│       ├── SummariseTab.tsx    # Summary generation and history
+│       ├── SummariseTab.tsx    # Book/Video outline with progressive summaries; paper layout
 │       └── QuizTab.tsx         # Quiz setup → active → debrief flow
 └── lib/
     ├── api.ts           # Axios instance (auth header, 401 retry interceptor)

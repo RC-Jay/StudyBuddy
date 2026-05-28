@@ -43,6 +43,7 @@ class Difficulty(str, Enum):
 class DocType(str, Enum):
     BOOK = "book"
     RESEARCH_PAPER = "research_paper"
+    VIDEO = "video"
 
 
 class SummaryGranularity(str, Enum):

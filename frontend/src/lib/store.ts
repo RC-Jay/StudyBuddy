@@ -7,9 +7,10 @@ export interface WorkspaceScope {
   id: string
   name: string
   status?: "pending" | "processing" | "summarising" | "ready" | "failed"
-  doc_type?: "book" | "research_paper"
+  doc_type?: "book" | "research_paper" | "video"
   expected_summary_count?: number
   toc?: TocItem[] | null
+  thumbnail_url?: string | null
 }
 
 interface AppStore {

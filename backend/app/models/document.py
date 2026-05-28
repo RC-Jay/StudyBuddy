@@ -22,9 +22,14 @@ class Document(Base):
     blob_path: Mapped[str] = mapped_column(Text, nullable=False)
     processing_status: Mapped[str] = mapped_column(String(20), default="pending")  # pending|processing|ready|failed
     processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    doc_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "book" | "research_paper"
+    doc_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "book" | "research_paper" | "video"
     expected_summary_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     toc: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Video-specific fields (NULL for documents)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    video_source: Mapped[str | None] = mapped_column(String(50), nullable=True)  # "youtube" | "ted" | …
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    thumbnail_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

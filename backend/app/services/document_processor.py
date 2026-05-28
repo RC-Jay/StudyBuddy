@@ -223,6 +223,10 @@ async def recover_interrupted_documents() -> None:
                     ProcessingStatus.SUMMARISING,
                 ]),
                 Document.deleted_at.is_(None),
+                # Videos are recovered separately by video_processor
+                # Use OR to include rows where doc_type is NULL (not yet classified)
+                # but file_type != "video" (those are definitely doc uploads)
+                Document.file_type != "video",
             )
             .all()
         )
